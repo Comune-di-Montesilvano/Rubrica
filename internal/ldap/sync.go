@@ -83,8 +83,16 @@ func loadPrimaryNumberPrefix(db *database.DB, cfg *config.Config) string {
 	return cfg.PrimaryNumberPrefix
 }
 
-// SyncContacts reads contacts from LDAP and updates the database
-func SyncContacts(db *database.DB, cfg *config.Config) error {
+// SyncContacts reads contacts from LDAP and updates the database. onProgress
+// (opzionale, passare nil se non serve) è chiamato con lo stato di
+// avanzamento: onProgress("", 0, 0) durante il bind, onProgress("", 0, total)
+// subito dopo la ricerca (per mostrare "0/total"), poi periodicamente durante
+// l'elaborazione dei contatti — usato dalla UI admin per mostrare un
+// feedback di progresso su un sync che altrimenti sembra "appeso".
+func SyncContacts(db *database.DB, cfg *config.Config, onProgress func(done, total int)) error {
+	if onProgress == nil {
+		onProgress = func(done, total int) {}
+	}
 	log.Printf("[SYNC] Starting LDAP sync...")
 
 	conn, err := BindForSync(cfg)
@@ -125,6 +133,7 @@ func SyncContacts(db *database.DB, cfg *config.Config) error {
 	filteredByDisabled := 0
 	missingGroupInfo := 0
 	observedGroups := map[string]int{}
+	onProgress(0, len(sr.Entries))
 
 	for _, entry := range sr.Entries {
 		totalEntries++
@@ -221,6 +230,7 @@ func SyncContacts(db *database.DB, cfg *config.Config) error {
 		}
 
 		count++
+		onProgress(totalEntries, len(sr.Entries))
 	}
 
 	log.Printf("[SYNC] Successfully synced %d contacts from LDAP", count)

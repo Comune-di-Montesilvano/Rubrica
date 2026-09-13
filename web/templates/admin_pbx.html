@@ -40,6 +40,7 @@
 
 <div class="card" style="margin-top:16px;">
     <h3>Sincronizzazione</h3>
-    <div class="sync-time" style="font-size:15px;">Ultimo sync riuscito: {{.LastPBXSync}}</div>
-    <button hx-post="/admin/pbx/sync" hx-target="#pbx-content" hx-swap="innerHTML" class="btn btn-primary" style="flex:none;">Sincronizza ora</button>
+    <div class="sync-time" style="font-size:15px;" id="pbx-last-sync-time">Ultimo sync riuscito: {{.LastPBXSync}}</div>
+    <button hx-post="/admin/pbx/sync" hx-target="#pbx-sync-status" hx-swap="innerHTML" class="btn btn-primary" style="flex:none;">Sincronizza ora</button>
+    <div id="pbx-sync-status"></div>
 </div>

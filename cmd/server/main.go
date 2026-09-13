@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -32,6 +33,59 @@ var (
 	pbService   *phonebook.Service
 	lastSync    time.Time
 	lastPBXSync time.Time
+)
+
+// syncStatus è lo stato di un sync manuale in corso, mostrato dalla UI
+// admin che fa polling (hx-get ogni ~1.2s) finché Running non torna false.
+// Un solo sync manuale per volta ha senso mostrarne (LDAP e PBX sono
+// indipendenti, ognuno ha il proprio); i sync automatici (ticker/startup)
+// non aggiornano questo stato, sono fire-and-forget in background come
+// prima — qui serve solo il feedback per il click esplicito dell'admin.
+type syncStatus struct {
+	mu      sync.Mutex
+	Running bool
+	Phase   string // testo fase corrente, es. "Elaborazione contatti: 120/350"
+	Message string // messaggio finale (successo o errore)
+	IsError bool
+}
+
+func (s *syncStatus) start() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Running = true
+	s.Phase = "Avvio..."
+	s.Message = ""
+	s.IsError = false
+}
+
+func (s *syncStatus) setPhase(phase string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Phase = phase
+}
+
+func (s *syncStatus) finish(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Running = false
+	if err != nil {
+		s.IsError = true
+		s.Message = "Sync fallito: " + err.Error()
+	} else {
+		s.IsError = false
+		s.Message = "Sync completato con successo."
+	}
+}
+
+func (s *syncStatus) snapshot() syncStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return syncStatus{Running: s.Running, Phase: s.Phase, Message: s.Message, IsError: s.IsError}
+}
+
+var (
+	ldapManualSync = &syncStatus{}
+	pbxManualSync  = &syncStatus{}
 )
 
 func main() {
@@ -124,12 +178,12 @@ func main() {
 
 	// Perform initial sync
 	go func() {
-		if err := ldap.SyncContacts(db, cfg); err != nil {
+		if err := ldap.SyncContacts(db, cfg, nil); err != nil {
 			log.Printf("[SYNC] Initial sync failed: %v", err)
 		} else {
 			lastSync = time.Now()
 		}
-		if err := pbx.SyncPBX(db); err != nil {
+		if err := pbx.SyncPBX(db, nil); err != nil {
 			log.Printf("[PBX] Initial sync failed: %v", err)
 		} else {
 			lastPBXSync = time.Now()
@@ -161,6 +215,7 @@ func main() {
 	admin.Use(requireAdmin)
 	admin.HandleFunc("", handleAdminDashboard).Methods("GET")
 	admin.HandleFunc("/sync", handleAdminSync).Methods("POST")
+	admin.HandleFunc("/sync/status", handleAdminSyncStatus).Methods("GET")
 	admin.HandleFunc("/config", handleAdminConfig).Methods("GET", "POST")
 	admin.HandleFunc("/groups", handleAdminListGroups).Methods("GET")
 	admin.HandleFunc("/groups", handleAdminCreateGroup).Methods("POST")
@@ -186,6 +241,7 @@ func main() {
 	admin.HandleFunc("/pbx", handleAdminPBX).Methods("GET")
 	admin.HandleFunc("/pbx", handleAdminSavePBXConfig).Methods("POST")
 	admin.HandleFunc("/pbx/sync", handleAdminSyncPBX).Methods("POST")
+	admin.HandleFunc("/pbx/sync/status", handleAdminSyncPBXStatus).Methods("GET")
 
 	// CardDAV server
 	carddavServer := carddav.NewServer(db, cfg)
@@ -209,12 +265,12 @@ func ldapSyncWorker() {
 
 	for range ticker.C {
 		log.Printf("[SYNC] Starting scheduled sync...")
-		if err := ldap.SyncContacts(db, cfg); err != nil {
+		if err := ldap.SyncContacts(db, cfg, nil); err != nil {
 			log.Printf("[SYNC] Failed: %v", err)
 		} else {
 			lastSync = time.Now()
 		}
-		if err := pbx.SyncPBX(db); err != nil {
+		if err := pbx.SyncPBX(db, nil); err != nil {
 			log.Printf("[PBX] Failed: %v", err)
 		} else {
 			lastPBXSync = time.Now()
@@ -529,17 +585,53 @@ func handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	templates.ExecuteTemplate(w, "admin.html", data)
 }
 
+// handleAdminSync avvia il sync LDAP manuale in background e ritorna subito
+// il frammento di stato "in corso" — la UI fa polling su /admin/sync/status
+// finché non risulta completato (successo o errore), invece di restare con
+// un bottone senza alcun feedback per tutta la durata del sync.
 func handleAdminSync(w http.ResponseWriter, r *http.Request) {
+	ldapManualSync.start()
 	go func() {
-		if err := ldap.SyncContacts(db, cfg); err != nil {
+		err := ldap.SyncContacts(db, cfg, func(done, total int) {
+			if total > 0 {
+				ldapManualSync.setPhase(fmt.Sprintf("Elaborazione contatti: %d/%d", done, total))
+			}
+		})
+		if err != nil {
 			log.Printf("[SYNC] Manual sync failed: %v", err)
 		} else {
 			lastSync = time.Now()
 			log.Printf("[SYNC] Manual sync completed")
 		}
+		ldapManualSync.finish(err)
 	}()
 
-	w.Write([]byte("Sync started"))
+	renderSyncStatus(w, r)
+}
+
+// handleAdminSyncStatus serve lo stato corrente per il polling htmx.
+func handleAdminSyncStatus(w http.ResponseWriter, r *http.Request) {
+	renderSyncStatus(w, r)
+}
+
+func renderSyncStatus(w http.ResponseWriter, r *http.Request) {
+	st := ldapManualSync.snapshot()
+	data := map[string]interface{}{
+		"Running": st.Running,
+		"Phase":   st.Phase,
+		"Message": st.Message,
+		"IsError": st.IsError,
+		"LastSync": func() string {
+			if lastSync.IsZero() {
+				return "mai"
+			}
+			return lastSync.Format("2006-01-02 15:04:05")
+		}(),
+		"StatusURL": "/admin/sync/status",
+		"OOBTarget": "last-sync-time",
+		"OOBLabel":  "",
+	}
+	templates.ExecuteTemplate(w, "sync_status.html", data)
 }
 
 func handleAdminConfig(w http.ResponseWriter, r *http.Request) {
@@ -935,7 +1027,7 @@ func handleAdminSaveOUMapping(w http.ResponseWriter, r *http.Request) {
 	}
 
 	go func() {
-		if err := ldap.SyncContacts(db, cfg); err != nil {
+		if err := ldap.SyncContacts(db, cfg, nil); err != nil {
 			log.Printf("[SYNC] Resync after OU mapping change failed: %v", err)
 		} else {
 			lastSync = time.Now()
@@ -1253,14 +1345,51 @@ func handleAdminSavePBXConfig(w http.ResponseWriter, r *http.Request) {
 	renderPBX(w, r)
 }
 
+// handleAdminSyncPBX avvia il sync PBX manuale in background e ritorna
+// subito il frammento di stato "in corso" nel div dedicato #pbx-sync-status
+// — senza toccare config/filtri già mostrati sulla pagina — la UI fa
+// polling su /admin/pbx/sync/status finché non risulta completato. Prima
+// era sincrono (bloccava la richiesta HTTP per l'intera durata dello
+// screen-scraping) e in caso di errore non mostrava nulla, solo un log.
 func handleAdminSyncPBX(w http.ResponseWriter, r *http.Request) {
-	if err := pbx.SyncPBX(db); err != nil {
-		log.Printf("[PBX] Manual sync failed: %v", err)
-	} else {
-		lastPBXSync = time.Now()
-		log.Printf("[PBX] Manual sync completed")
+	pbxManualSync.start()
+	go func() {
+		err := pbx.SyncPBX(db, pbxManualSync.setPhase)
+		if err != nil {
+			log.Printf("[PBX] Manual sync failed: %v", err)
+		} else {
+			lastPBXSync = time.Now()
+			log.Printf("[PBX] Manual sync completed")
+		}
+		pbxManualSync.finish(err)
+	}()
+
+	renderSyncStatusPBX(w, r)
+}
+
+// handleAdminSyncPBXStatus serve lo stato corrente per il polling htmx.
+func handleAdminSyncPBXStatus(w http.ResponseWriter, r *http.Request) {
+	renderSyncStatusPBX(w, r)
+}
+
+func renderSyncStatusPBX(w http.ResponseWriter, r *http.Request) {
+	st := pbxManualSync.snapshot()
+	data := map[string]interface{}{
+		"Running": st.Running,
+		"Phase":   st.Phase,
+		"Message": st.Message,
+		"IsError": st.IsError,
+		"LastSync": func() string {
+			if lastPBXSync.IsZero() {
+				return "mai"
+			}
+			return lastPBXSync.Format("2006-01-02 15:04:05")
+		}(),
+		"StatusURL": "/admin/pbx/sync/status",
+		"OOBTarget": "pbx-last-sync-time",
+		"OOBLabel":  "Ultimo sync riuscito: ",
 	}
-	renderPBX(w, r)
+	templates.ExecuteTemplate(w, "sync_status.html", data)
 }
 
 // Helper function for vCard generation (reused from carddav package logic)

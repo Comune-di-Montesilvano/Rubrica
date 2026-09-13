@@ -122,8 +122,16 @@ func FilterCallGroups(groups []CallGroup, f Filters) []CallGroup {
 // SyncPBX esegue un giro completo di sync (login, fetch, filtra, applica).
 // No-op silenzioso se l'URL non è ancora configurato da /admin/pbx —
 // subsystem disattivo. Un errore di rete/login/parsing salta l'intero giro
-// senza toccare i dati esistenti.
-func SyncPBX(db *database.DB) error {
+// senza toccare i dati esistenti. onPhase (opzionale, nil se non serve) è
+// chiamato ad ogni fase — non c'è una percentuale reale da riportare (lo
+// screen-scraping è poche richieste HTTP, non un loop su tanti elementi),
+// ma un giro può comunque richiedere secondi se il centralino è lento a
+// rispondere: onPhase dà alla UI qualcosa da mostrare invece di un bottone
+// "appeso" senza feedback.
+func SyncPBX(db *database.DB, onPhase func(phase string)) error {
+	if onPhase == nil {
+		onPhase = func(phase string) {}
+	}
 	url, user, pass := LoadPBXConfig(db)
 	if url == "" {
 		return nil
@@ -131,16 +139,19 @@ func SyncPBX(db *database.DB) error {
 
 	log.Printf("[PBX] Starting PBX sync...")
 
+	onPhase("Accesso al centralino...")
 	client := NewClient(url)
 	if err := client.Login(user, pass); err != nil {
 		return fmt.Errorf("pbx login failed: %w", err)
 	}
 
+	onPhase("Recupero interni...")
 	peers, err := client.FetchPeers()
 	if err != nil {
 		return fmt.Errorf("pbx fetch peers failed: %w", err)
 	}
 
+	onPhase("Recupero gruppi di chiamata...")
 	groups, err := client.FetchCallGroups()
 	if err != nil {
 		return fmt.Errorf("pbx fetch call groups failed: %w", err)
@@ -150,6 +161,7 @@ func SyncPBX(db *database.DB) error {
 	peers = FilterPeers(peers, filters)
 	groups = FilterCallGroups(groups, filters)
 
+	onPhase("Applicazione dati...")
 	applied, err := ApplyPeers(db, peers, time.Now())
 	if err != nil {
 		return fmt.Errorf("pbx apply peers failed: %w", err)

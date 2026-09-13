@@ -280,6 +280,14 @@ td.num { font-variant-numeric: tabular-nums; font-weight: 600; }
 /* --- Loading --- */
 .loading-spinner { text-align: center; padding: 40px; color: var(--ink-soft); }
 
+/* --- Sync status feedback --- */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 0.9s linear infinite; }
+.sync-status { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-top: 10px; }
+.sync-status.running { color: var(--ink-soft); }
+.sync-status.success { color: var(--accent); }
+.sync-status.error { color: var(--danger); }
+
 /* --- Responsive --- */
 
 @media (max-width: 768px) {
