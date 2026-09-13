@@ -1161,6 +1161,24 @@ func handleAdminRenameArea(w http.ResponseWriter, r *http.Request) {
 	if err := db.RenameArea(id, name); err != nil {
 		log.Printf("[ADMIN] Failed to rename area %d: %v", id, err)
 	}
+
+	// Regola per range interno (opzionale): entrambi i campi vuoti =
+	// nessuna regola (SetAreaRange con nil, nil la rimuove).
+	var rangeStart, rangeEnd *int
+	if v := strings.TrimSpace(r.FormValue("range_start")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			rangeStart = &n
+		}
+	}
+	if v := strings.TrimSpace(r.FormValue("range_end")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			rangeEnd = &n
+		}
+	}
+	if err := db.SetAreaRange(id, rangeStart, rangeEnd); err != nil {
+		log.Printf("[ADMIN] Failed to set area range %d: %v", id, err)
+	}
+
 	renderAdminAreas(w, r)
 }
 

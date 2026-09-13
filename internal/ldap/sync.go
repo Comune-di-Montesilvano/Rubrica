@@ -127,6 +127,14 @@ func SyncContacts(db *database.DB, cfg *config.Config, onProgress func(done, tot
 	syncTime := time.Now()
 	areaMapping := loadOUAreaMapping(db)
 	prefixTemplate := loadPrimaryNumberPrefix(db, cfg)
+	// Regole area-per-range (vedi database.Area.RangeStart/RangeEnd): un
+	// contatto senza area da OU mapping il cui interno cade in un range
+	// assegnato prende quella come Area — e la usa anche come Department
+	// se non ne ha già uno, altrimenti resterebbe senza etichetta.
+	areas, err := db.ListAreas()
+	if err != nil {
+		log.Printf("[SYNC] Failed to list areas for range matching: %v", err)
+	}
 	count := 0
 	totalEntries := 0
 	filteredByGroup := 0
@@ -225,6 +233,16 @@ func SyncContacts(db *database.DB, cfg *config.Config, onProgress func(done, tot
 		}
 		ldapGroupsStr := strings.Join(ldapGroups, ",")
 
+		area := deriveArea(entry.DN, areaMapping)
+		if area == "" {
+			if a := database.MatchExtensionRange(firstExtension(telephoneNumber), areas); a != nil {
+				area = a.Key
+				if department == "" {
+					department = a.Name
+				}
+			}
+		}
+
 		contact := &database.Contact{
 			UID:           uid,
 			DisplayName:   displayName,
@@ -236,7 +254,7 @@ func SyncContacts(db *database.DB, cfg *config.Config, onProgress func(done, tot
 			Description:   description,
 			LDAPGroups:    ldapGroupsStr,
 			LDAPDN:        entry.DN,
-			Area:          deriveArea(entry.DN, areaMapping),
+			Area:          area,
 			Disabled:      disabled,
 			LastSync:      syncTime,
 		}

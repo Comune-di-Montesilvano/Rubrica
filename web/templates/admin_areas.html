@@ -2,23 +2,33 @@
     <h3>Aree</h3>
 </div>
 <p class="helptext" style="margin:8px 0 12px;">Le aree filtrano la rubrica (sidebar) e vengono assegnate alle OU nel mapping sotto. Eliminare un'area la rimuove dai contatti che la usano (tornano "nessuna area"), non elimina i contatti.</p>
+<p class="helptext" style="margin:0 0 12px;">Il "range interni" è una regola alternativa alla mappatura OU: un contatto o gruppo del centralino senza area già assegnata, il cui interno numerico cade nel range, prende quest'area — e la usa anche come reparto/nome, se non ne ha già uno.</p>
 
 <table>
-    <thead><tr><th>Nome</th><th>Chiave</th><th></th></tr></thead>
+    <thead><tr><th>Nome</th><th>Chiave</th><th>Range interni</th><th></th></tr></thead>
     <tbody>
         {{range .Areas}}
         <tr>
             <td>
-                <form hx-post="/admin/areas/{{.ID}}" hx-target="#areas-content" hx-swap="innerHTML" class="field-row" style="margin:0;">
-                    <input type="text" name="name" value="{{.Name}}" class="input">
-                    <button type="submit" class="btn btn-ghost" style="flex:none;">{{index $.Messages "save"}}</button>
+                <form id="area-form-{{.ID}}" hx-post="/admin/areas/{{.ID}}" hx-target="#areas-content" hx-swap="innerHTML" style="margin:0;">
+                    <input type="text" name="name" value="{{.Name}}" class="input" style="width:100%;">
                 </form>
             </td>
             <td class="num">{{.Key}}</td>
             <td>
-                <button hx-post="/admin/areas/{{.ID}}/delete" hx-confirm="Eliminare l'area {{.Name}}?" hx-target="#areas-content" hx-swap="innerHTML" class="btn-danger">
-                    {{index $.Messages "delete"}}
-                </button>
+                <div class="field-row" style="margin:0;">
+                    <input type="text" name="range_start" form="area-form-{{.ID}}" value="{{if .RangeStart}}{{.RangeStart}}{{end}}" placeholder="da" class="input" style="width:70px;">
+                    <span class="helptext">&ndash;</span>
+                    <input type="text" name="range_end" form="area-form-{{.ID}}" value="{{if .RangeEnd}}{{.RangeEnd}}{{end}}" placeholder="a" class="input" style="width:70px;">
+                </div>
+            </td>
+            <td>
+                <div class="row-actions">
+                    <button type="submit" form="area-form-{{.ID}}" class="btn btn-ghost">{{index $.Messages "save"}}</button>
+                    <button hx-post="/admin/areas/{{.ID}}/delete" hx-confirm="Eliminare l'area {{.Name}}?" hx-target="#areas-content" hx-swap="innerHTML" class="btn-danger">
+                        {{index $.Messages "delete"}}
+                    </button>
+                </div>
             </td>
         </tr>
         {{end}}

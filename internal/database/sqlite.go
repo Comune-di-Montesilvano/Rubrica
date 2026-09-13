@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,8 +44,15 @@ type Area struct {
 	ID        int64
 	Key       string
 	Name      string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// RangeStart/RangeEnd (opzionali, nil = nessuna regola) definiscono una
+	// regola "per interno": un contatto/gruppo senza area già assegnata
+	// (da OU mapping o esplicitamente) il cui interno numerico cade in
+	// [RangeStart, RangeEnd] viene assegnato a quest'area — e la prende
+	// anche come reparto/nome gruppo, per non restare senza etichetta.
+	RangeStart *int
+	RangeEnd   *int
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 type GroupNumber struct {
@@ -54,6 +62,7 @@ type GroupNumber struct {
 	Description  string
 	Source       string // "manual" (default) o "pbx"
 	NameOverride bool   // se true, il sync PBX non sovrascrive più Name
+	Area         string // area assegnata da una regola per range interno (vedi Area.RangeStart/RangeEnd), "" se nessuna
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
@@ -172,6 +181,9 @@ func (db *DB) migrate() error {
 		"ALTER TABLE contacts ADD COLUMN disabled INTEGER DEFAULT 0",
 		"ALTER TABLE group_numbers ADD COLUMN source TEXT DEFAULT 'manual'",
 		"ALTER TABLE group_numbers ADD COLUMN name_override INTEGER DEFAULT 0",
+		"ALTER TABLE group_numbers ADD COLUMN area TEXT DEFAULT ''",
+		"ALTER TABLE areas ADD COLUMN range_start INTEGER",
+		"ALTER TABLE areas ADD COLUMN range_end INTEGER",
 	}
 
 	for _, stmt := range alterStatements {
@@ -574,6 +586,7 @@ func (db *DB) UpsertPBXContact(c *Contact) error {
 		ldap_ext = CASE WHEN manual_override = 0 THEN excluded.ldap_ext ELSE ldap_ext END,
 		primary_number = CASE WHEN manual_override = 0 THEN excluded.primary_number ELSE primary_number END,
 		department = CASE WHEN manual_override = 0 THEN excluded.department ELSE department END,
+		area = CASE WHEN manual_override = 0 THEN excluded.area ELSE area END,
 		deleted_at = NULL,
 		last_sync = excluded.last_sync,
 		updated_at = excluded.updated_at
@@ -827,7 +840,7 @@ func (db *DB) ListDuplicateExtensions() ([]DuplicateExtension, error) {
 
 // ListAreas returns all areas, alphabetically by name.
 func (db *DB) ListAreas() ([]*Area, error) {
-	rows, err := db.Query(`SELECT id, key, name, created_at, updated_at FROM areas ORDER BY name`)
+	rows, err := db.Query(`SELECT id, key, name, range_start, range_end, created_at, updated_at FROM areas ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list areas: %w", err)
 	}
@@ -836,12 +849,43 @@ func (db *DB) ListAreas() ([]*Area, error) {
 	var areas []*Area
 	for rows.Next() {
 		a := &Area{}
-		if err := rows.Scan(&a.ID, &a.Key, &a.Name, &a.CreatedAt, &a.UpdatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.Key, &a.Name, &a.RangeStart, &a.RangeEnd, &a.CreatedAt, &a.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan area: %w", err)
 		}
 		areas = append(areas, a)
 	}
 	return areas, nil
+}
+
+// SetAreaRange imposta (o rimuove, passando nil) la regola per range
+// interno di un'area — vedi Area.RangeStart/RangeEnd.
+func (db *DB) SetAreaRange(id int64, start, end *int) error {
+	_, err := db.Exec(`UPDATE areas SET range_start = ?, range_end = ?, updated_at = ? WHERE id = ?`, start, end, time.Now(), id)
+	if err != nil {
+		return fmt.Errorf("failed to set area range: %w", err)
+	}
+	return nil
+}
+
+// MatchExtensionRange trova la prima area con una regola di range che
+// copre ext (interpretato come numero) — usato per assegnare un'area a un
+// contatto/gruppo non altrimenti mappato (OU mapping vuoto per i
+// contatti, o gruppo del centralino senza corrispondenza). Nil se ext non
+// è numerico o nessuna regola lo copre.
+func MatchExtensionRange(ext string, areas []*Area) *Area {
+	n, err := strconv.Atoi(ext)
+	if err != nil {
+		return nil
+	}
+	for _, a := range areas {
+		if a.RangeStart == nil || a.RangeEnd == nil {
+			continue
+		}
+		if n >= *a.RangeStart && n <= *a.RangeEnd {
+			return a
+		}
+	}
+	return nil
 }
 
 // CreateArea inserts a new area. Key must be unique (usato come valore di
@@ -933,10 +977,10 @@ func (db *DB) DeleteGroup(id int64) error {
 }
 
 func (db *DB) GetGroup(id int64) (*GroupNumber, error) {
-	query := `SELECT id, number, name, description, source, name_override, created_at, updated_at FROM group_numbers WHERE id = ?`
+	query := `SELECT id, number, name, description, source, name_override, area, created_at, updated_at FROM group_numbers WHERE id = ?`
 	group := &GroupNumber{}
 	err := db.QueryRow(query, id).Scan(&group.ID, &group.Number, &group.Name, &group.Description,
-		&group.Source, &group.NameOverride, &group.CreatedAt, &group.UpdatedAt)
+		&group.Source, &group.NameOverride, &group.Area, &group.CreatedAt, &group.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -947,7 +991,7 @@ func (db *DB) GetGroup(id int64) (*GroupNumber, error) {
 }
 
 func (db *DB) ListGroups() ([]*GroupNumber, error) {
-	query := `SELECT id, number, name, description, source, name_override, created_at, updated_at FROM group_numbers ORDER BY number`
+	query := `SELECT id, number, name, description, source, name_override, area, created_at, updated_at FROM group_numbers ORDER BY number`
 	rows, err := db.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list groups: %w", err)
@@ -958,7 +1002,7 @@ func (db *DB) ListGroups() ([]*GroupNumber, error) {
 	for rows.Next() {
 		group := &GroupNumber{}
 		err := rows.Scan(&group.ID, &group.Number, &group.Name, &group.Description,
-			&group.Source, &group.NameOverride, &group.CreatedAt, &group.UpdatedAt)
+			&group.Source, &group.NameOverride, &group.Area, &group.CreatedAt, &group.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan group: %w", err)
 		}
@@ -970,10 +1014,10 @@ func (db *DB) ListGroups() ([]*GroupNumber, error) {
 // GetGroupByNumber returns the group_numbers row for a given interno, o
 // nil se non esiste.
 func (db *DB) GetGroupByNumber(number string) (*GroupNumber, error) {
-	query := `SELECT id, number, name, description, source, name_override, created_at, updated_at FROM group_numbers WHERE number = ?`
+	query := `SELECT id, number, name, description, source, name_override, area, created_at, updated_at FROM group_numbers WHERE number = ?`
 	group := &GroupNumber{}
 	err := db.QueryRow(query, number).Scan(&group.ID, &group.Number, &group.Name, &group.Description,
-		&group.Source, &group.NameOverride, &group.CreatedAt, &group.UpdatedAt)
+		&group.Source, &group.NameOverride, &group.Area, &group.CreatedAt, &group.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -985,7 +1029,7 @@ func (db *DB) GetGroupByNumber(number string) (*GroupNumber, error) {
 
 // ListGroupsBySource filtra group_numbers per source ("manual" o "pbx").
 func (db *DB) ListGroupsBySource(source string) ([]*GroupNumber, error) {
-	query := `SELECT id, number, name, description, source, name_override, created_at, updated_at FROM group_numbers WHERE source = ? ORDER BY number`
+	query := `SELECT id, number, name, description, source, name_override, area, created_at, updated_at FROM group_numbers WHERE source = ? ORDER BY number`
 	rows, err := db.Query(query, source)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list groups by source: %w", err)
@@ -996,7 +1040,7 @@ func (db *DB) ListGroupsBySource(source string) ([]*GroupNumber, error) {
 	for rows.Next() {
 		group := &GroupNumber{}
 		if err := rows.Scan(&group.ID, &group.Number, &group.Name, &group.Description,
-			&group.Source, &group.NameOverride, &group.CreatedAt, &group.UpdatedAt); err != nil {
+			&group.Source, &group.NameOverride, &group.Area, &group.CreatedAt, &group.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan group: %w", err)
 		}
 		groups = append(groups, group)
@@ -1012,18 +1056,19 @@ func (db *DB) ListGroupsBySource(source string) ([]*GroupNumber, error) {
 // preesistente con lo stesso number sia già source='pbx' (il conflitto con
 // un gruppo manuale va risolto dal chiamante PRIMA di invocare questo
 // metodo, cancellando la riga manuale).
-func (db *DB) UpsertPBXGroup(number, name, description string, nameOverride bool) (*GroupNumber, error) {
+func (db *DB) UpsertPBXGroup(number, name, description string, nameOverride bool, area string) (*GroupNumber, error) {
 	now := time.Now()
 	query := `
-	INSERT INTO group_numbers (number, name, description, source, name_override, created_at, updated_at)
-	VALUES (?, ?, ?, 'pbx', ?, ?, ?)
+	INSERT INTO group_numbers (number, name, description, source, name_override, area, created_at, updated_at)
+	VALUES (?, ?, ?, 'pbx', ?, ?, ?, ?)
 	ON CONFLICT(number) DO UPDATE SET
 		name = CASE WHEN name_override = 0 THEN excluded.name ELSE name END,
 		description = excluded.description,
 		source = 'pbx',
+		area = excluded.area,
 		updated_at = excluded.updated_at
 	`
-	if _, err := db.Exec(query, number, name, description, nameOverride, now, now); err != nil {
+	if _, err := db.Exec(query, number, name, description, nameOverride, area, now, now); err != nil {
 		return nil, fmt.Errorf("failed to upsert pbx group: %w", err)
 	}
 	return db.GetGroupByNumber(number)

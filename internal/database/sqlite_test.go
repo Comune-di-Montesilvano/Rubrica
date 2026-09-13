@@ -315,7 +315,7 @@ func TestUpdateGroupSetsNameOverride(t *testing.T) {
 func TestUpsertPBXGroupCreatesAndUpdates(t *testing.T) {
 	db := newTestDB(t)
 
-	g, err := db.UpsertPBXGroup("500", "Gruppo Test", "", false)
+	g, err := db.UpsertPBXGroup("500", "Gruppo Test", "", false, "")
 	if err != nil {
 		t.Fatalf("UpsertPBXGroup failed: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestUpsertPBXGroupCreatesAndUpdates(t *testing.T) {
 		t.Fatalf("g = %+v, unexpected", g)
 	}
 
-	g2, err := db.UpsertPBXGroup("500", "Gruppo Rinominato Dal Centralino", "", false)
+	g2, err := db.UpsertPBXGroup("500", "Gruppo Rinominato Dal Centralino", "", false, "")
 	if err != nil {
 		t.Fatalf("second UpsertPBXGroup failed: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestUpsertPBXGroupCreatesAndUpdates(t *testing.T) {
 
 func TestUpsertPBXGroupRespectsNameOverride(t *testing.T) {
 	db := newTestDB(t)
-	g, err := db.UpsertPBXGroup("501", "Nome Migrato", "", true)
+	g, err := db.UpsertPBXGroup("501", "Nome Migrato", "", true, "")
 	if err != nil {
 		t.Fatalf("UpsertPBXGroup failed: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestUpsertPBXGroupRespectsNameOverride(t *testing.T) {
 		t.Fatal("NameOverride dovrebbe essere true come passato alla creazione")
 	}
 
-	g2, err := db.UpsertPBXGroup("501", "Nome Nuovo Dal Centralino", "", false)
+	g2, err := db.UpsertPBXGroup("501", "Nome Nuovo Dal Centralino", "", false, "")
 	if err != nil {
 		t.Fatalf("second UpsertPBXGroup failed: %v", err)
 	}
@@ -370,7 +370,7 @@ func TestListGroupsBySource(t *testing.T) {
 	if err := db.CreateGroup(&GroupNumber{Number: "1", Name: "Manuale"}); err != nil {
 		t.Fatalf("CreateGroup failed: %v", err)
 	}
-	if _, err := db.UpsertPBXGroup("2", "PBX", "", false); err != nil {
+	if _, err := db.UpsertPBXGroup("2", "PBX", "", false, ""); err != nil {
 		t.Fatalf("UpsertPBXGroup failed: %v", err)
 	}
 

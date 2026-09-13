@@ -335,6 +335,15 @@ func ApplyPeers(db *database.DB, peers []Peer, syncTime time.Time) (int, error) 
 		inDomain[e] = struct{}{}
 	}
 
+	// Regole area-per-range (vedi Area.RangeStart/RangeEnd): un peer non
+	// altrimenti mappato il cui interno cade in un range assegnato prende
+	// quella come Area — e la usa anche come Department, altrimenti
+	// resterebbe con solo il generico "Centralino - non mappato".
+	areas, err := db.ListAreas()
+	if err != nil {
+		log.Printf("[PBX] Failed to list areas for range matching: %v", err)
+	}
+
 	applied := 0
 	for _, p := range peers {
 		if _, ok := inDomain[p.Extension]; ok {
@@ -347,12 +356,18 @@ func ApplyPeers(db *database.DB, peers []Peer, syncTime time.Time) (int, error) 
 		if !isNumericExtension(p.Extension) {
 			continue
 		}
+		area, department := "", "Centralino - non mappato"
+		if a := database.MatchExtensionRange(p.Extension, areas); a != nil {
+			area = a.Key
+			department = a.Name
+		}
 		c := &database.Contact{
 			UID:           "pbx-" + p.Extension,
 			DisplayName:   p.CallerID,
 			LDAPExt:       p.Extension,
 			PrimaryNumber: p.Extension,
-			Department:    "Centralino - non mappato",
+			Department:    department,
+			Area:          area,
 			LastSync:      syncTime,
 		}
 		if err := db.UpsertPBXContact(c); err != nil {
@@ -376,6 +391,15 @@ func ApplyPeers(db *database.DB, peers []Peer, syncTime time.Time) (int, error) 
 func ApplyCallGroups(db *database.DB, groups []CallGroup) error {
 	seen := make(map[string]struct{}, len(groups))
 
+	// Regole area-per-range (vedi Area.RangeStart/RangeEnd): un gruppo del
+	// centralino il cui interno cade in un range assegnato prende quella
+	// come Area — vedi anche ApplyPeers per lo stesso meccanismo sui
+	// contatti.
+	areas, err := db.ListAreas()
+	if err != nil {
+		log.Printf("[PBX] Failed to list areas for range matching: %v", err)
+	}
+
 	for _, g := range groups {
 		seen[g.Extension] = struct{}{}
 
@@ -396,7 +420,12 @@ func ApplyCallGroups(db *database.DB, groups []CallGroup) error {
 			}
 		}
 
-		row, err := db.UpsertPBXGroup(g.Extension, name, "", nameOverride)
+		area := ""
+		if a := database.MatchExtensionRange(g.Extension, areas); a != nil {
+			area = a.Key
+		}
+
+		row, err := db.UpsertPBXGroup(g.Extension, name, "", nameOverride, area)
 		if err != nil {
 			log.Printf("[PBX] skip call group %s: %v", g.Extension, err)
 			continue
