@@ -113,7 +113,7 @@ func SyncContacts(db *database.DB, cfg *config.Config) error {
 		}
 
 		title := entry.GetAttributeValue("title")
-		description := entry.GetAttributeValue("description")
+		description := normalizeDescription(entry.GetAttributeValue("description"))
 
 		// Generate primary number from template
 		primaryNumber := generatePrimaryNumber(telephoneNumber, cfg)
@@ -138,6 +138,7 @@ func SyncContacts(db *database.DB, cfg *config.Config) error {
 			Description:   description,
 			LDAPGroups:    ldapGroupsStr,
 			LDAPDN:        entry.DN,
+			Area:          deriveArea(entry.DN),
 			LastSync:      syncTime,
 		}
 
@@ -229,6 +230,51 @@ func groupAliases(group string) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// deriveArea maps an LDAP DN to the app's Area classification, based on
+// the OU segment used by this AD structure (OU=INTERNI / OU=ESTERNI /
+// OU=AREA_POLITICA sotto OU=COMUNE-MS). Ritorna "" se nessuna OU nota è
+// trovata (account builtin/servizio come Guest, Administrator, krbtgt).
+func deriveArea(dn string) string {
+	d := strings.ToLower(dn)
+	switch {
+	case strings.Contains(d, "ou=interni"):
+		return "interni"
+	case strings.Contains(d, "ou=esterni"):
+		return "esterni"
+	case strings.Contains(d, "ou=area_politica"):
+		return "politica"
+	default:
+		return ""
+	}
+}
+
+// descriptionAliases raccoglie varianti note (typo, maiuscole incoerenti)
+// del campo description di AD, osservate sui dati reali del Comune di
+// Montesilvano. Le chiavi sono minuscole: normalizeDescription confronta
+// dopo strings.ToLower, quindi qualsiasi variante di maiuscola collassa
+// già a questo punto senza bisogno di duplicare le voci.
+var descriptionAliases = map[string]string{
+	"agente di polizi locale":  "Agente di Polizia Locale",
+	"agente di polizia locale": "Agente di Polizia Locale",
+	"edliizia":                 "Edilizia",
+	"istuttore":                "Istruttore",
+	"usciere":                  "Usciere",
+}
+
+// normalizeDescription collassa spazi multipli e riscrive typo/varianti
+// note al valore canonico. Valori non mappati passano inalterati (solo
+// trim). Non modifica LDAP, solo il valore scritto in contacts.description.
+func normalizeDescription(raw string) string {
+	trimmed := strings.Join(strings.Fields(raw), " ")
+	if trimmed == "" {
+		return ""
+	}
+	if canonical, ok := descriptionAliases[strings.ToLower(trimmed)]; ok {
+		return canonical
+	}
+	return trimmed
 }
 
 func extractCNFromDN(dn string) string {
