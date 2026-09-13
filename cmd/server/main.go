@@ -149,6 +149,7 @@ func main() {
 	admin.HandleFunc("/groups/{id}/members", handleAdminGroupMembers).Methods("GET")
 	admin.HandleFunc("/groups/{id}/members", handleAdminAddMember).Methods("POST")
 	admin.HandleFunc("/groups/{id}/members/{contact_id}/delete", handleAdminRemoveMember).Methods("POST")
+	admin.HandleFunc("/groups/{id}/contacts/search", handleAdminContactSearch).Methods("GET")
 	admin.HandleFunc("/contacts/{uid}/override", handleAdminContactOverride).Methods("POST")
 
 	// CardDAV server
@@ -456,6 +457,13 @@ func handleAdminConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleAdminListGroups(w http.ResponseWriter, r *http.Request) {
+	renderAdminGroups(w, r)
+}
+
+// renderAdminGroups re-renders the etichette numero table (admin_groups.html).
+// Used both for the initial hx-get "load" and after create/delete, so the
+// UI reflects the change instead of showing the handler's plain-text result.
+func renderAdminGroups(w http.ResponseWriter, r *http.Request) {
 	groups, err := pbService.ListGroupsWithMembers()
 	if err != nil {
 		http.Error(w, "Failed to list groups", http.StatusInternalServerError)
@@ -483,7 +491,7 @@ func handleAdminCreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Write([]byte("Group created"))
+	renderAdminGroups(w, r)
 }
 
 func handleAdminUpdateGroup(w http.ResponseWriter, r *http.Request) {
@@ -514,7 +522,7 @@ func handleAdminDeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Write([]byte("Group deleted"))
+	renderAdminGroups(w, r)
 }
 
 func handleAdminGroupMembers(w http.ResponseWriter, r *http.Request) {
@@ -530,6 +538,7 @@ func handleAdminGroupMembers(w http.ResponseWriter, r *http.Request) {
 	locale := i18n.ResolveLocale(r)
 	data := map[string]interface{}{
 		"Group":    groupWithMembers.Group,
+		"GroupID":  groupWithMembers.Group.ID,
 		"Members":  groupWithMembers.Members,
 		"Messages": i18n.GetMessages(locale),
 	}
@@ -547,7 +556,7 @@ func handleAdminAddMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Write([]byte("Member added"))
+	renderMembersList(w, r, groupID)
 }
 
 func handleAdminRemoveMember(w http.ResponseWriter, r *http.Request) {
@@ -560,7 +569,52 @@ func handleAdminRemoveMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Write([]byte("Member removed"))
+	renderMembersList(w, r, groupID)
+}
+
+// renderMembersList re-renders just the #members-list fragment for a
+// group, used after add/remove so the modal reflects the change instead
+// of showing the handler's plain-text result.
+func renderMembersList(w http.ResponseWriter, r *http.Request, groupID int64) {
+	members, err := db.GetGroupMembers(groupID)
+	if err != nil {
+		http.Error(w, "Failed to list members", http.StatusInternalServerError)
+		return
+	}
+
+	locale := i18n.ResolveLocale(r)
+	data := map[string]interface{}{
+		"GroupID":  groupID,
+		"Members":  members,
+		"Messages": i18n.GetMessages(locale),
+	}
+	templates.ExecuteTemplate(w, "admin_members_list.html", data)
+}
+
+// handleAdminContactSearch returns a clickable dropdown of contacts
+// matching the query, for the "cerca e aggiungi" member picker. Each
+// result posts itself as a new group member via HTMX — no separate
+// submit step, no raw contact ID typed by hand.
+func handleAdminContactSearch(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	groupID := vars["id"]
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+
+	if query == "" {
+		return
+	}
+
+	contacts, err := db.SearchContacts(query, 8)
+	if err != nil {
+		http.Error(w, "Search failed", http.StatusInternalServerError)
+		return
+	}
+
+	data := map[string]interface{}{
+		"Contacts": contacts,
+		"GroupID":  groupID,
+	}
+	templates.ExecuteTemplate(w, "admin_contact_search.html", data)
 }
 
 func handleAdminContactOverride(w http.ResponseWriter, r *http.Request) {

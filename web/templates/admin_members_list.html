@@ -1,0 +1,31 @@
+<div id="members-list">
+    {{if .Members}}
+    <table>
+        <thead>
+            <tr>
+                <th>{{index .Messages "name"}}</th>
+                <th>{{index .Messages "email"}}</th>
+                <th>{{index .Messages "phone"}}</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Members}}
+            <tr>
+                <td>{{.DisplayName}}</td>
+                <td class="member-count">{{.Email}}</td>
+                <td class="member-count">{{.PrimaryNumber}}</td>
+                <td>
+                    <button hx-post="/admin/groups/{{$.GroupID}}/members/{{.ID}}/delete"
+                            hx-target="#members-list" hx-swap="outerHTML" class="btn-danger">
+                        {{index $.Messages "delete"}}
+                    </button>
+                </td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{else}}
+    <p class="helptext" style="text-align:center;padding:16px 0;">Nessun membro</p>
+    {{end}}
+</div>

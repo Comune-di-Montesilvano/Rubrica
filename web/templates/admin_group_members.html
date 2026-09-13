@@ -3,41 +3,12 @@
 
     <div style="margin-bottom:18px;">
         <div class="helptext" style="margin-bottom:6px;">{{index .Messages "add_member"}}</div>
-        <form hx-post="/admin/groups/{{.Group.ID}}/members" hx-target="#members-list" hx-swap="outerHTML" class="field-row">
-            <input type="number" name="contact_id" placeholder="Contact ID" required class="input">
-            <button type="submit" class="btn btn-primary" style="flex:none;">{{index .Messages "add_member"}}</button>
-        </form>
+        <input type="text" class="input" style="width:100%;" placeholder="Cerca per nome..."
+               hx-get="/admin/groups/{{.Group.ID}}/contacts/search"
+               hx-trigger="keyup changed delay:300ms"
+               hx-target="#contact-search-results" hx-swap="innerHTML">
+        <div id="contact-search-results"></div>
     </div>
 
-    <div id="members-list">
-        {{if .Members}}
-        <table>
-            <thead>
-                <tr>
-                    <th>{{index .Messages "name"}}</th>
-                    <th>{{index .Messages "email"}}</th>
-                    <th>{{index .Messages "phone"}}</th>
-                    <th></th>
-                </tr>
-            </thead>
-            <tbody>
-                {{range .Members}}
-                <tr>
-                    <td>{{.DisplayName}}</td>
-                    <td class="member-count">{{.Email}}</td>
-                    <td class="member-count">{{.PrimaryNumber}}</td>
-                    <td>
-                        <button hx-post="/admin/groups/{{$.Group.ID}}/members/{{.ID}}/delete"
-                                hx-target="#members-list" hx-swap="outerHTML" class="btn-danger">
-                            {{index $.Messages "delete"}}
-                        </button>
-                    </td>
-                </tr>
-                {{end}}
-            </tbody>
-        </table>
-        {{else}}
-        <p class="helptext" style="text-align:center;padding:16px 0;">Nessun membro</p>
-        {{end}}
-    </div>
+    {{template "admin_members_list.html" .}}
 </div>
