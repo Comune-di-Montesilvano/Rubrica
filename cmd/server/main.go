@@ -142,6 +142,7 @@ func main() {
 	r.HandleFunc("/contacts/{uid}", handleContactDetail).Methods("GET")
 	r.HandleFunc("/contacts/{uid}/export", handleExportVCard).Methods("GET")
 	r.HandleFunc("/health", handleHealth).Methods("GET")
+	r.HandleFunc("/version", handleVersion).Methods("GET")
 
 	// Auth routes
 	r.HandleFunc("/login", handleLogin).Methods("GET", "POST")
@@ -270,6 +271,7 @@ func railData() map[string]interface{} {
 		"AreaCounts": counts,
 		"Total":      total,
 		"Areas":      areas,
+		"AppVersion": AppVersion,
 	}
 }
 
@@ -426,6 +428,14 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(status)
+}
+
+// handleVersion serve la versione corrente in esecuzione — usato dal poll
+// lato client (rail.html) per accorgersi che il container è stato
+// aggiornato e proporre un reload, senza dover controllare manualmente.
+func handleVersion(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"version": AppVersion})
 }
 
 // Auth handlers
