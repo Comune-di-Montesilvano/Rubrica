@@ -362,6 +362,74 @@ func (db *DB) CountByArea() (map[string]int, error) {
 	return counts, nil
 }
 
+// SoftDeleteStale marca come cancellato (deleted_at) qualsiasi contatto
+// attivo il cui last_sync sia precedente a syncTime — cioè non è stato
+// toccato dal giro di sync corrente (disabilitato, spostato, rimosso da
+// AD). Ritorna quanti sono stati appena soft-deleted.
+func (db *DB) SoftDeleteStale(syncTime time.Time) (int64, error) {
+	result, err := db.Exec(
+		`UPDATE contacts SET deleted_at = ?, updated_at = ? WHERE deleted_at IS NULL AND last_sync < ?`,
+		syncTime, syncTime, syncTime,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to soft-delete stale contacts: %w", err)
+	}
+	return result.RowsAffected()
+}
+
+// ListDistinctLDAPDNs returns the distinct ldap_dn of every contact ever
+// synced (active or soft-deleted) — usato dal pannello admin per elencare
+// le OU note su cui costruire il mapping Area.
+func (db *DB) ListDistinctLDAPDNs() ([]string, error) {
+	rows, err := db.Query(`SELECT DISTINCT ldap_dn FROM contacts WHERE ldap_dn IS NOT NULL AND ldap_dn != ''`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list distinct DNs: %w", err)
+	}
+	defer rows.Close()
+
+	var dns []string
+	for rows.Next() {
+		var dn string
+		if err := rows.Scan(&dn); err != nil {
+			return nil, fmt.Errorf("failed to scan DN: %w", err)
+		}
+		dns = append(dns, dn)
+	}
+	return dns, nil
+}
+
+// ListContactsWithNumber returns active contacts that have a phone number
+// (primario o interno) — candidati di default nel picker "aggiungi
+// membro" del pannello admin, prima ancora di digitare una ricerca.
+func (db *DB) ListContactsWithNumber(limit int) ([]*Contact, error) {
+	query := `
+	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, manual_override, deleted_at, last_sync, created_at, updated_at
+	FROM contacts
+	WHERE deleted_at IS NULL AND ((primary_number IS NOT NULL AND primary_number != '') OR (ldap_ext IS NOT NULL AND ldap_ext != ''))
+	ORDER BY display_name
+	LIMIT ?
+	`
+
+	rows, err := db.Query(query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list contacts with number: %w", err)
+	}
+	defer rows.Close()
+
+	var contacts []*Contact
+	for rows.Next() {
+		contact := &Contact{}
+		err := rows.Scan(&contact.ID, &contact.UID, &contact.DisplayName, &contact.Email,
+			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.ManualOverride,
+			&contact.DeletedAt, &contact.LastSync, &contact.CreatedAt, &contact.UpdatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan contact: %w", err)
+		}
+		contacts = append(contacts, contact)
+	}
+	return contacts, nil
+}
+
 // Group operations
 
 func (db *DB) CreateGroup(group *GroupNumber) error {

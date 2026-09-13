@@ -16,7 +16,7 @@ func TestDeriveArea(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := deriveArea(c.dn)
+			got := deriveArea(c.dn, DefaultOUAreaMapping)
 			if got != c.want {
 				t.Errorf("deriveArea(%q) = %q, want %q", c.dn, got, c.want)
 			}

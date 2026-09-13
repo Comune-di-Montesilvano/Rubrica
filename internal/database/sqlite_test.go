@@ -65,6 +65,45 @@ func TestUpsertContactRespectsManualOverrideForArea(t *testing.T) {
 	}
 }
 
+func TestSoftDeleteStale(t *testing.T) {
+	db := newTestDB(t)
+	old := time.Now().Add(-2 * time.Hour)
+	fresh := time.Now()
+
+	stale := &Contact{UID: "stale1", DisplayName: "Stale", Area: "interni", LastSync: old}
+	kept := &Contact{UID: "kept1", DisplayName: "Kept", Area: "interni", LastSync: fresh}
+	if err := db.UpsertContact(stale); err != nil {
+		t.Fatalf("UpsertContact(stale1) failed: %v", err)
+	}
+	if err := db.UpsertContact(kept); err != nil {
+		t.Fatalf("UpsertContact(kept1) failed: %v", err)
+	}
+
+	n, err := db.SoftDeleteStale(fresh)
+	if err != nil {
+		t.Fatalf("SoftDeleteStale failed: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("SoftDeleteStale returned %d, want 1", n)
+	}
+
+	got, err := db.GetContact("stale1")
+	if err != nil {
+		t.Fatalf("GetContact(stale1) failed: %v", err)
+	}
+	if got != nil {
+		t.Errorf("stale1 should be soft-deleted (GetContact should return nil), got %+v", got)
+	}
+
+	got2, err := db.GetContact("kept1")
+	if err != nil {
+		t.Fatalf("GetContact(kept1) failed: %v", err)
+	}
+	if got2 == nil {
+		t.Error("kept1 should still be active")
+	}
+}
+
 func TestCountByArea(t *testing.T) {
 	db := newTestDB(t)
 	contacts := []*Contact{

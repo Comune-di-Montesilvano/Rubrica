@@ -1,6 +1,7 @@
 package ldap
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
@@ -11,6 +12,76 @@ import (
 	"github.com/mirkochipdotcom/ldavsync/internal/config"
 	"github.com/mirkochipdotcom/ldavsync/internal/database"
 )
+
+// OUAreaMappingConfigKey è la chiave app_config sotto cui è salvato il
+// mapping OU->Area editabile da admin (JSON, es. {"INTERNI":"interni"}).
+const OUAreaMappingConfigKey = "ou_area_mapping"
+
+// PrimaryNumberPrefixConfigKey è la chiave app_config per il prefisso
+// numero primario, editabile da admin — sostituisce PRIMARY_NUMBER_PREFIX_TEMPLATE
+// come fonte di verità una volta salvato (l'env resta solo il default
+// iniziale per un deploy mai configurato da UI).
+const PrimaryNumberPrefixConfigKey = "primary_number_prefix"
+
+// DefaultOUAreaMapping è usato quando l'admin non ha ancora salvato un
+// mapping personalizzato.
+var DefaultOUAreaMapping = map[string]string{
+	"INTERNI":       "interni",
+	"ESTERNI":       "esterni",
+	"AREA_POLITICA": "politica",
+}
+
+// ClassificationOU estrae il token OU usato per classificare l'Area di un
+// contatto: il primo segmento OU nel DN che non sia il wrapper generico
+// "Users" o "COMUNE-MS" (es. "INTERNI", "ESTERNI", "AREA_POLITICA",
+// "DUMMY"). Esportata perché il pannello admin la usa per elencare le OU
+// note su cui costruire il mapping.
+func ClassificationOU(dn string) string {
+	for _, part := range strings.Split(dn, ",") {
+		part = strings.TrimSpace(part)
+		upper := strings.ToUpper(part)
+		if !strings.HasPrefix(upper, "OU=") {
+			continue
+		}
+		name := strings.TrimPrefix(upper, "OU=")
+		if name == "USERS" || name == "COMUNE-MS" {
+			continue
+		}
+		return name
+	}
+	return ""
+}
+
+func deriveArea(dn string, mapping map[string]string) string {
+	ou := ClassificationOU(dn)
+	if ou == "" {
+		return ""
+	}
+	return mapping[ou]
+}
+
+// loadOUAreaMapping legge il mapping salvato da admin, o il default se non
+// ancora configurato / JSON non valido.
+func loadOUAreaMapping(db *database.DB) map[string]string {
+	raw, err := db.GetConfig(OUAreaMappingConfigKey)
+	if err != nil || raw == "" {
+		return DefaultOUAreaMapping
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(raw), &m); err != nil || len(m) == 0 {
+		return DefaultOUAreaMapping
+	}
+	return m
+}
+
+// loadPrimaryNumberPrefix legge il template prefisso salvato da admin, o
+// quello di config.Config (env, default iniziale) se non ancora configurato.
+func loadPrimaryNumberPrefix(db *database.DB, cfg *config.Config) string {
+	if stored, err := db.GetConfig(PrimaryNumberPrefixConfigKey); err == nil && stored != "" {
+		return stored
+	}
+	return cfg.PrimaryNumberPrefix
+}
 
 // SyncContacts reads contacts from LDAP and updates the database
 func SyncContacts(db *database.DB, cfg *config.Config) error {
@@ -46,6 +117,8 @@ func SyncContacts(db *database.DB, cfg *config.Config) error {
 	}
 
 	syncTime := time.Now()
+	areaMapping := loadOUAreaMapping(db)
+	prefixTemplate := loadPrimaryNumberPrefix(db, cfg)
 	count := 0
 	totalEntries := 0
 	filteredByGroup := 0
@@ -116,7 +189,7 @@ func SyncContacts(db *database.DB, cfg *config.Config) error {
 		description := normalizeDescription(entry.GetAttributeValue("description"))
 
 		// Generate primary number from template
-		primaryNumber := generatePrimaryNumber(telephoneNumber, cfg)
+		primaryNumber := generatePrimaryNumber(telephoneNumber, prefixTemplate)
 
 		// Extract LDAP groups (CN from memberOf)
 		var ldapGroups []string
@@ -138,7 +211,7 @@ func SyncContacts(db *database.DB, cfg *config.Config) error {
 			Description:   description,
 			LDAPGroups:    ldapGroupsStr,
 			LDAPDN:        entry.DN,
-			Area:          deriveArea(entry.DN),
+			Area:          deriveArea(entry.DN, areaMapping),
 			LastSync:      syncTime,
 		}
 
@@ -151,6 +224,18 @@ func SyncContacts(db *database.DB, cfg *config.Config) error {
 	}
 
 	log.Printf("[SYNC] Successfully synced %d contacts from LDAP", count)
+
+	// Reconciliation: qualsiasi contatto attivo il cui last_sync non è
+	// stato aggiornato in questo giro (disabilitato, spostato fuori dai
+	// gruppi consentiti, rimosso da AD) non è più presente nel risultato
+	// corrente — va soft-deleted, altrimenti resta per sempre nei conteggi
+	// Area e nelle ricerche.
+	if staleCount, err := db.SoftDeleteStale(syncTime); err != nil {
+		log.Printf("[SYNC] Failed to soft-delete stale contacts: %v", err)
+	} else if staleCount > 0 {
+		log.Printf("[SYNC] Soft-deleted %d stale contacts (no longer present in LDAP result)", staleCount)
+	}
+
 	if cfg.LDAPOnlyActive {
 		log.Printf("[SYNC] Disabled accounts filtered: %d of %d total entries", filteredByDisabled, totalEntries)
 	}
@@ -232,24 +317,6 @@ func groupAliases(group string) []string {
 	return out
 }
 
-// deriveArea maps an LDAP DN to the app's Area classification, based on
-// the OU segment used by this AD structure (OU=INTERNI / OU=ESTERNI /
-// OU=AREA_POLITICA sotto OU=COMUNE-MS). Ritorna "" se nessuna OU nota è
-// trovata (account builtin/servizio come Guest, Administrator, krbtgt).
-func deriveArea(dn string) string {
-	d := strings.ToLower(dn)
-	switch {
-	case strings.Contains(d, "ou=interni"):
-		return "interni"
-	case strings.Contains(d, "ou=esterni"):
-		return "esterni"
-	case strings.Contains(d, "ou=area_politica"):
-		return "politica"
-	default:
-		return ""
-	}
-}
-
 // descriptionAliases raccoglie varianti note (typo, maiuscole incoerenti)
 // del campo description di AD, osservate sui dati reali del Comune di
 // Montesilvano. Le chiavi sono minuscole: normalizeDescription confronta
@@ -325,13 +392,12 @@ func topObservedGroups(stats map[string]int, limit int) []string {
 }
 
 // generatePrimaryNumber creates a full phone number from extension using the configured template
-func generatePrimaryNumber(ext string, cfg *config.Config) string {
+func generatePrimaryNumber(ext string, template string) string {
 	if ext == "" {
 		return ""
 	}
 
 	// Replace {ext} placeholder in template
-	template := cfg.PrimaryNumberPrefix
 	if template == "" {
 		return ext
 	}
