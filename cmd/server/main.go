@@ -70,6 +70,17 @@ func main() {
 			}
 			return strings.ToUpper(s[start:end])
 		},
+		"initials": func(name string) string {
+			parts := strings.Fields(name)
+			if len(parts) == 0 {
+				return ""
+			}
+			result := strings.ToUpper(string(parts[0][0]))
+			if len(parts) > 1 {
+				result += strings.ToUpper(string(parts[len(parts)-1][0]))
+			}
+			return result
+		},
 	}
 	templates = template.Must(template.New("").Funcs(funcMap).ParseGlob("web/templates/*.html"))
 	log.Printf("[TEMPLATES] Loaded templates")
@@ -178,16 +189,29 @@ func requireAdmin(next http.Handler) http.Handler {
 
 func handleIndex(w http.ResponseWriter, r *http.Request) {
 	locale := i18n.ResolveLocale(r)
+
+	counts, err := db.CountByArea()
+	if err != nil {
+		log.Printf("[INDEX] Failed to count by area: %v", err)
+		counts = map[string]int{}
+	}
+	total := 0
+	for _, n := range counts {
+		total += n
+	}
+
 	data := map[string]interface{}{
-		"Messages": i18n.GetMessages(locale),
-		"Locale":   locale,
+		"Messages":   i18n.GetMessages(locale),
+		"Locale":     locale,
+		"AreaCounts": counts,
+		"Total":      total,
 	}
 	templates.ExecuteTemplate(w, "phonebook.html", data)
 }
 
 func handleSearch(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	groupFilter := strings.TrimSpace(r.URL.Query().Get("group"))
+	groupFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("group")))
 
 	var (
 		results []*phonebook.ContactWithGroups
@@ -195,7 +219,7 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 	)
 
 	if query == "" {
-		results, err = pbService.ListContactsWithGroups(200, 0)
+		results, err = pbService.ListContactsWithGroups(500, 0)
 	} else {
 		results, err = pbService.SearchContactsWithGroups(query, 50)
 	}
@@ -206,43 +230,19 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply group filter if specified
-	if groupFilter != "" {
-		filtered := make([]*phonebook.ContactWithGroups, 0)
-		groupFilterLower := strings.ToLower(groupFilter)
-		patterns := cfg.LDAPOUFilters[groupFilterLower]
-		if len(patterns) == 0 {
-			patterns = []string{"ou=" + groupFilterLower, "/" + groupFilterLower}
-		}
-		log.Printf("[SEARCH] Applying filter '%s' to %d contacts", groupFilter, len(results))
-
-		// Debug: log first 3 contacts' DN
-		for i, result := range results {
-			if i < 3 {
-				log.Printf("[SEARCH] Sample contact %d: %s - DN: %s", i+1, result.Contact.DisplayName, result.Contact.LDAPDN)
-			}
-		}
-
+	if groupFilter == "interni" || groupFilter == "esterni" || groupFilter == "politica" {
+		filtered := make([]*phonebook.ContactWithGroups, 0, len(results))
 		for _, result := range results {
-			dnLower := strings.ToLower(result.Contact.LDAPDN)
-			match := false
-			for _, pattern := range patterns {
-				if strings.Contains(dnLower, pattern) {
-					match = true
-					break
-				}
-			}
-			if match {
+			if result.Contact.Area == groupFilter {
 				filtered = append(filtered, result)
 			}
 		}
-		log.Printf("[SEARCH] Filter '%s' result: %d contacts", groupFilter, len(filtered))
 		results = filtered
 	}
 
 	locale := i18n.ResolveLocale(r)
 	data := map[string]interface{}{
-		"Results":  results,
+		"Groups":   phonebook.GroupByDepartment(results),
 		"Messages": i18n.GetMessages(locale),
 	}
 
