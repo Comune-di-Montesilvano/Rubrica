@@ -6,111 +6,71 @@
     <title>{{index .Messages "app_title"}}</title>
     <script src="https://unpkg.com/htmx.org@2.0.0"></script>
     <link rel="stylesheet" href="/static/css/style.css">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <!-- Navbar -->
-    <nav class="navbar">
-        <div class="navbar-brand">
-            <strong>{{index .Messages "app_title"}}</strong>
-        </div>
-        <div class="navbar-search">
-            <input type="search" 
-                   name="q"
-                   placeholder="{{index .Messages "search_placeholder"}}"
-                   class="search-box"
-                   hx-get="/search"
-                   hx-trigger="keyup changed delay:500ms"
-                   hx-target="#search-results"
-                   hx-swap="innerHTML">
-        </div>
-        <div style="margin-left: 24px;">
-            <a href="/login" style="color: var(--text-secondary); text-decoration: none; font-size: 14px;">
-                {{index .Messages "admin_panel"}}
-            </a>
-        </div>
-    </nav>
+    <div class="shell">
+        <nav class="rail">
+            <a href="/" class="rail-brand">Ldav<span>Sync</span></a>
+            <div class="rail-group">Area</div>
+            <button class="rail-item active" data-area=""
+                    hx-get="/search" hx-target="#search-results"
+                    onclick="setActiveArea(this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg>
+                <span>{{index .Messages "area_all"}}</span><span class="n">{{.Total}}</span>
+            </button>
+            <button class="rail-item" data-area="interni"
+                    hx-get="/search?group=interni" hx-target="#search-results"
+                    onclick="setActiveArea(this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3"/><path d="M5 20c0-3.9 3.1-7 7-7s7 3.1 7 7"/></svg>
+                <span>{{index .Messages "area_interni"}}</span><span class="n">{{index .AreaCounts "interni"}}</span>
+            </button>
+            <button class="rail-item" data-area="esterni"
+                    hx-get="/search?group=esterni" hx-target="#search-results"
+                    onclick="setActiveArea(this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.2 2.4 3.4 5.6 3.4 9s-1.2 6.6-3.4 9c-2.2-2.4-3.4-5.6-3.4-9s1.2-6.6 3.4-9z"/></svg>
+                <span>{{index .Messages "area_esterni"}}</span><span class="n">{{index .AreaCounts "esterni"}}</span>
+            </button>
+            <button class="rail-item" data-area="politica"
+                    hx-get="/search?group=politica" hx-target="#search-results"
+                    onclick="setActiveArea(this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 21V10l8-6 8 6v11"/><path d="M9 21v-6h6v6"/></svg>
+                <span>{{index .Messages "area_politica"}}</span><span class="n">{{index .AreaCounts "politica"}}</span>
+            </button>
+            <div class="rail-foot">
+                <a href="/login">{{index .Messages "admin_panel"}}</a>
+            </div>
+        </nav>
 
-    <!-- Layout -->
-    <div class="app-layout">
-        <!-- Sidebar -->
-        <aside class="sidebar">
-            <button class="sidebar-item active" 
-                    hx-get="/search"
-                    hx-target="#search-results"
-                    onclick="document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active')); this.classList.add('active');">
-                <svg class="sidebar-icon" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z"/>
-                </svg>
-                <span>Tutti i contatti</span>
-                <span class="sidebar-count" id="total-count">...</span>
-            </button>
-            
-            <button class="sidebar-item" 
-                    hx-get="/search?group=interni"
-                    hx-target="#search-results"
-                    onclick="document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active')); this.classList.add('active');">
-                <svg class="sidebar-icon" fill="currentColor" viewBox="0 0 20 20">
-                    <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/>
-                </svg>
-                <span>Interni</span>
-                <span class="sidebar-count" id="interni-count">...</span>
-            </button>
-            
-            <button class="sidebar-item" 
-                    hx-get="/search?group=esterni"
-                    hx-target="#search-results"
-                    onclick="document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active')); this.classList.add('active');">
-                <svg class="sidebar-icon" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M8 9a3 3 0 100-6 3 3 0 000 6zM8 11a6 6 0 016 6H2a6 6 0 016-6zM16 7a1 1 0 10-2 0v1h-1a1 1 0 100 2h1v1a1 1 0 102 0v-1h1a1 1 0 100-2h-1V7z"/>
-                </svg>
-                <span>Esterni</span>
-                <span class="sidebar-count" id="esterni-count">...</span>
-            </button>
-
-            <button class="sidebar-item" 
-                    hx-get="/search?group=politica"
-                    hx-target="#search-results"
-                    onclick="document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active')); this.classList.add('active');">
-                <svg class="sidebar-icon" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M10 2a1 1 0 011 1v2.2a4 4 0 012.8 2.8H16a1 1 0 110 2h-2.2a4 4 0 01-2.8 2.8V15a1 1 0 11-2 0v-2.2a4 4 0 01-2.8-2.8H4a1 1 0 110-2h2.2A4 4 0 019 5.2V3a1 1 0 011-1z"/>
-                </svg>
-                <span>Area Politica</span>
-                <span class="sidebar-count" id="politica-count">...</span>
-            </button>
-
-            <div style="margin: 16px 24px 8px; padding-top: 16px; border-top: 1px solid var(--border-color);">
-                <div style="color: var(--text-tertiary); font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">
-                    Etichette
-                </div>
+        <main class="main">
+            <div class="search">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+                <input type="search" name="q" placeholder="{{index .Messages "search_placeholder"}}"
+                       hx-get="/search" hx-trigger="keyup changed delay:500ms"
+                       hx-target="#search-results" hx-swap="innerHTML">
             </div>
 
-            <button class="sidebar-item" 
-                    hx-get="/admin/groups"
-                    onclick="document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active')); this.classList.add('active');">
-                <svg class="sidebar-icon" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z"/>
-                </svg>
-                <span>Gestisci etichette</span>
-            </button>
-        </aside>
+            <div class="prefix-helper" id="prefix-helper">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>
+                <span>{{index .Messages "prefix_helper"}}</span>
+                <button type="button" onclick="document.getElementById('prefix-helper').hidden = true; try { localStorage.setItem('ldavsync-prefix-helper-dismissed', '1'); } catch(e) {}" aria-label="Chiudi">&times;</button>
+            </div>
 
-        <!-- Main Content -->
-        <main class="main-content">
-            <div class="contacts-container">
-                <div id="search-results"
-                     hx-get="/search"
-                     hx-trigger="load"
-                     hx-target="this"
-                     hx-swap="innerHTML">
-                    <div class="loading-spinner">
-                        <p>Caricamento contatti...</p>
-                    </div>
-                </div>
+            <div id="search-results" hx-get="/search" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
+                <div class="loading-spinner"><p>Caricamento contatti...</p></div>
             </div>
         </main>
     </div>
+
+    <script>
+        function setActiveArea(btn) {
+            document.querySelectorAll('.rail-item').forEach(function (i) { i.classList.remove('active'); });
+            btn.classList.add('active');
+        }
+        try {
+            if (localStorage.getItem('ldavsync-prefix-helper-dismissed') === '1') {
+                document.getElementById('prefix-helper').hidden = true;
+            }
+        } catch (e) {}
+    </script>
 </body>
 </html>

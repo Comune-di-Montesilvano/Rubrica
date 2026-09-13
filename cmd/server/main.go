@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
@@ -80,6 +81,25 @@ func main() {
 				result += strings.ToUpper(string(parts[len(parts)-1][0]))
 			}
 			return result
+		},
+		// sentenceCase riscrive un'etichetta tutta maiuscola (come i reparti
+		// letti da AD, es. "POLIZIA LOCALE") in sentence case per la UI,
+		// senza toccare il dato in DB. Le etichette non interamente
+		// maiuscole (es. "Amministrazione politica", generata dal codice,
+		// non da AD) passano invariate: non sono il caso che deve normalizzare.
+		"sentenceCase": func(s string) string {
+			if s == "" || s != strings.ToUpper(s) {
+				return s
+			}
+			words := strings.Fields(strings.ToLower(s))
+			for i, w := range words {
+				r := []rune(w)
+				if len(r) > 0 {
+					r[0] = unicode.ToUpper(r[0])
+				}
+				words[i] = string(r)
+			}
+			return strings.Join(words, " ")
 		},
 	}
 	templates = template.Must(template.New("").Funcs(funcMap).ParseGlob("web/templates/*.html"))
