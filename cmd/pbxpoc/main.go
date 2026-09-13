@@ -6,7 +6,7 @@
 //
 // Uso:
 //
-//	PBX_URL=https://10.0.90.253 PBX_USER=admin PBX_PASS=... go run ./cmd/pbxpoc
+//	PBX_URL=https://192.0.2.10 PBX_USER=admin PBX_PASS=... go run ./cmd/pbxpoc
 package main
 
 import (

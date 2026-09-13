@@ -149,7 +149,7 @@ func TestLoadPBXConfigEmptyWhenNotSet(t *testing.T) {
 
 func TestLoadPBXConfigReadsFromDB(t *testing.T) {
 	db := newTestDB(t)
-	if err := db.SetConfig(PBXURLConfigKey, "https://10.0.90.253"); err != nil {
+	if err := db.SetConfig(PBXURLConfigKey, "https://192.0.2.10"); err != nil {
 		t.Fatalf("SetConfig failed: %v", err)
 	}
 	if err := db.SetConfig(PBXUserConfigKey, "admin"); err != nil {
@@ -160,7 +160,7 @@ func TestLoadPBXConfigReadsFromDB(t *testing.T) {
 	}
 
 	url, user, pass := LoadPBXConfig(db)
-	if url != "https://10.0.90.253" || user != "admin" || pass != "secret" {
+	if url != "https://192.0.2.10" || user != "admin" || pass != "secret" {
 		t.Errorf("LoadPBXConfig = (%q,%q,%q), want i valori salvati", url, user, pass)
 	}
 }

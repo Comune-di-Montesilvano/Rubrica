@@ -43,7 +43,7 @@ type Client struct {
 }
 
 // NewClient crea un client per il centralino a baseURL (es.
-// "https://10.0.90.253"). Il certificato TLS è tipicamente self-signed
+// "https://192.0.2.10"). Il certificato TLS è tipicamente self-signed
 // (dispositivo su IP privato) — la verifica è disabilitata di proposito.
 func NewClient(baseURL string) *Client {
 	jar, _ := cookiejar.New(nil)
