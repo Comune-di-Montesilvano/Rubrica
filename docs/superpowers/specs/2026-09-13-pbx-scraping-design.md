@@ -30,16 +30,54 @@ Entrambi richiedono `Referer: <base>/vivo.php` e la sessione autenticata.
 
 ## Config
 
-Nuove env var, tutte opzionali:
+Nessuna env var: URL/utente/password del centralino vivono **solo** in
+`app_config`, editabili da una **pagina admin dedicata** (`/admin/pbx`) —
+zero mapping da aggiungere in `.env`/`docker-compose.yml`, subsystem
+disattivo di default finché qualcuno non lo configura da UI.
 
-- `PBX_URL` — base URL del centralino (es. `https://10.0.90.253`). Se
-  assente, l'intero subsystem PBX resta disattivo (nessun tentativo di
-  connessione, nessun impatto sul resto dell'app).
-- `PBX_USER`, `PBX_PASS` — credenziali login.
+La pagina `/admin/pbx` (voce di menu propria nella sidebar admin, come
+`/admin/ou-mapping` o `/admin/areas`) espone:
+- form con URL, utente, password (la password non viene mai ri-mostrata in
+  chiaro nel form dopo il primo salvataggio: campo vuoto = "lascia
+  invariata", si sovrascrive solo se viene digitato un nuovo valore);
+- tre **filtri di esclusione** (checkbox, tutti attivi di default — vedi
+  sotto), anch'essi salvati in `app_config`;
+- un pulsante **"Sincronizza ora"** dedicato (manual trigger, come già
+  esiste per LDAP in `/admin/sync`, ma solo per il PBX);
+- data/ora dell'ultimo sync PBX riuscito.
 
-Il sync PBX gira nello stesso ticker orario già usato per `SyncContacts`
-(LDAP) in `main.go` — non un ticker separato, un job aggiuntivo nello stesso
-giro, eseguito anche lui una volta allo startup.
+### Filtri di esclusione
+
+Il centralino espone anche dati "spazzatura" che non ha senso portare in
+rubrica. Tre filtri configurabili (default: tutti attivi), applicati ai dati
+appena scaricati, prima di `ApplyPeers`/`ApplyCallGroups`:
+
+- **Contatti senza nome**: alcuni interni hanno `callerid` placeholder tipo
+  `" <521>"` o `"<534>"` (nessun nome mai configurato sul centralino) —
+  esclusi per default via un match `^<\d+>$` sul valore trimmato.
+- **Gruppi disattivi**: call group con lo stato "disattivo" sul centralino
+  (icona `off.gif` nella tabella sorgente, campo `Enabled=false`) — esclusi
+  per default.
+- **Gruppi senza destinatari**: call group con zero interni membri
+  configurati — esclusi per default (non avrebbe senso una voce rubrica per
+  un gruppo che non chiama nessuno).
+
+Un peer/gruppo escluso da un filtro è trattato come "non presente in questo
+giro": se esisteva già come `source='pbx'` da un sync precedente (es. il
+filtro è stato attivato dopo, o l'admin ha appena riattivato un filtro),
+viene rimosso secondo le stesse regole di stale-cleanup già descritte sotto
+(soft-delete per i contatti, cancellazione diretta per i call group) — non
+un caso speciale, la naturale conseguenza di applicare i filtri PRIMA delle
+funzioni di apply.
+
+Se l'URL non è ancora configurato da admin, l'intero subsystem resta
+disattivo: nessun tentativo di connessione, nessun impatto sul resto
+dell'app, e la pagina admin mostra il form vuoto pronto per la prima
+configurazione.
+
+Il sync automatico gira nello stesso ticker orario già usato per
+`SyncContacts` (LDAP) in `main.go` — non un ticker separato, un job
+aggiuntivo nello stesso giro, eseguito anche lui una volta allo startup.
 
 ## Schema
 
@@ -154,8 +192,9 @@ chiamata dal ticker in `main.go`, no-op silenzioso se `cfg.PBXURL == ""`.
 
 ## Fuori scope (YAGNI)
 
-- Nessuna UI admin dedicata per il PBX: gli override si fanno con la UI
-  esistente (edit contatto per i peers, edit gruppo per i call group).
+- Gli override di nome (peers/call group) restano nella UI esistente (edit
+  contatto, edit gruppo) — la nuova pagina `/admin/pbx` gestisce solo
+  connessione/credenziali e sync manuale, non i singoli dati sincronizzati.
 - Nessuna gestione di più centralini contemporanei.
 - Nessuna cache/retry sofisticata sul login — un fallimento salta il giro,
   il prossimo tick (un'ora dopo) riprova.
