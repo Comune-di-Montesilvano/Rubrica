@@ -1,4 +1,4 @@
-# Multi-stage build for LdavSync
+# Multi-stage build for Rubrica
 FROM golang:1.25-alpine AS builder
 
 # Install build dependencies for CGO (required for SQLite)
@@ -17,7 +17,7 @@ COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=1 GOOS=linux go build \
     -ldflags="-X main.AppVersion=${VERSION} -s -w" \
-    -o ldavsync \
+    -o rubrica \
     ./cmd/server
 
 # Runtime stage
@@ -27,25 +27,25 @@ FROM alpine:3.19
 RUN apk add --no-cache ca-certificates tzdata
 
 # Create non-root user
-RUN addgroup -g 1001 ldavsync && \
-    adduser -D -u 1001 -G ldavsync ldavsync
+RUN addgroup -g 1001 rubrica && \
+    adduser -D -u 1001 -G rubrica rubrica
 
 # Create data directory
-RUN mkdir -p /data && chown ldavsync:ldavsync /data
+RUN mkdir -p /data && chown rubrica:rubrica /data
 
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /build/ldavsync .
+COPY --from=builder /build/rubrica .
 
 # Copy web assets
 COPY web/ ./web/
 
 # Change ownership
-RUN chown -R ldavsync:ldavsync /app
+RUN chown -R rubrica:rubrica /app
 
 # Switch to non-root user
-USER ldavsync
+USER rubrica
 
 # Volume for persistent data
 VOLUME ["/data"]
@@ -58,4 +58,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
 
 # Run
-CMD ["./ldavsync"]
+CMD ["./rubrica"]

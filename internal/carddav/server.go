@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/mirkochipdotcom/ldavsync/internal/config"
-	"github.com/mirkochipdotcom/ldavsync/internal/database"
-	"github.com/mirkochipdotcom/ldavsync/internal/ldap"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/config"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/ldap"
 )
 
 // Server handles CardDAV protocol requests
@@ -57,7 +57,7 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		username, password, ok := r.BasicAuth()
 		if !ok {
 			log.Printf("[CARDDAV] No Basic Auth header provided")
-			w.Header().Set("WWW-Authenticate", `Basic realm="LdavSync CardDAV"`)
+			w.Header().Set("WWW-Authenticate", `Basic realm="Rubrica CardDAV"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -67,14 +67,14 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		isAuth, _, err := ldap.Authenticate(username, password, s.cfg)
 		if err != nil {
 			log.Printf("[CARDDAV] Auth error for user %s: %v", username, err)
-			w.Header().Set("WWW-Authenticate", `Basic realm="LdavSync CardDAV"`)
+			w.Header().Set("WWW-Authenticate", `Basic realm="Rubrica CardDAV"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 
 		if !isAuth {
 			log.Printf("[CARDDAV] Auth failed for user %s", username)
-			w.Header().Set("WWW-Authenticate", `Basic realm="LdavSync CardDAV"`)
+			w.Header().Set("WWW-Authenticate", `Basic realm="Rubrica CardDAV"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -296,9 +296,9 @@ func (s *Server) collectionPath(book string) string {
 
 func (s *Server) bookDisplayName(book string) string {
 	if book == "" || book == "all" {
-		return "LdavSync Contatti"
+		return "Rubrica Contatti"
 	}
-	return fmt.Sprintf("LdavSync %s", strings.Title(book))
+	return fmt.Sprintf("Rubrica %s", strings.Title(book))
 }
 
 func (s *Server) filterContactsByBook(contacts []*database.Contact, book string) []*database.Contact {

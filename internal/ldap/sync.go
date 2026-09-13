@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
-	"github.com/mirkochipdotcom/ldavsync/internal/config"
-	"github.com/mirkochipdotcom/ldavsync/internal/database"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/config"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
 )
 
 // OUAreaMappingConfigKey è la chiave app_config sotto cui è salvato il

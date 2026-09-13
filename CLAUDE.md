@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-LdavSync (module `github.com/mirkochipdotcom/ldavsync`, historically "gorubrica"): a corporate directory app that syncs contacts hourly from LDAP/AD, stores them in embedded SQLite, serves a search UI (HTMX), and exposes a CardDAV server for Thunderbird/iOS/Android address book clients.
+**Rubrica** (module `github.com/Comune-di-Montesilvano/Rubrica` — historically "gorubrica" → "LdavSync" → "Rubrica", repo transferred from `mirkochipdotcom/LdavSync`): a corporate directory app, purpose-built for a specific municipality's AD/PBX (not designed for reuse elsewhere), that syncs contacts hourly from LDAP/AD, stores them in embedded SQLite, serves a search UI (HTMX), and exposes a CardDAV server for Thunderbird/iOS/Android address book clients.
+
+Docker image: `ghcr.io/comune-di-montesilvano/rubrica` (lowercase — GHCR/OCI require lowercase image names, unlike the GitHub org/repo name itself). Binary/container/system-user name: `rubrica`. Database file path is unchanged (`/data/ldavsync.db`, see `DATABASE_PATH` in `compose.yml`) — deliberately not renamed, to avoid touching the volume path of any already-running deployment.
 
 ## Commands
 
@@ -13,7 +15,7 @@ LdavSync (module `github.com/mirkochipdotcom/ldavsync`, historically "gorubrica"
 go run cmd/server/main.go
 
 # Build (CGO required — go-sqlite3 is a cgo driver)
-CGO_ENABLED=1 go build -o ldavsync ./cmd/server
+CGO_ENABLED=1 go build -o rubrica ./cmd/server
 
 # Tests
 go test ./...
@@ -22,7 +24,7 @@ go test -run TestName ./internal/... # single test
 go vet ./...
 
 # Docker
-docker build --build-arg VERSION=0.1.0 -t ldavsync:0.1.0 .
+docker build --build-arg VERSION=0.1.0 -t rubrica:0.1.0 .
 docker compose up -d --build   # rebuild + redeploy against real LDAP for end-to-end checks
 ```
 

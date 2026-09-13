@@ -3,7 +3,7 @@ package phonebook
 import (
 	"testing"
 
-	"github.com/mirkochipdotcom/ldavsync/internal/database"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
 )
 
 func TestGroupByDepartment(t *testing.T) {

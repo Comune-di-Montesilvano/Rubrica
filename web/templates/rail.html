@@ -1,5 +1,5 @@
 <nav class="rail">
-    <a href="/" class="rail-brand">Ldav<span>Sync</span></a>
+    <a href="/" class="rail-brand">Ru<span>brica</span></a>
     <div class="rail-group">Area</div>
     {{if eq .Section "contacts"}}
     <button class="rail-item{{if not .ActiveArea}} active{{end}}" data-area=""
@@ -62,5 +62,40 @@
     <div class="rail-foot">
         <a href="/login">{{index .Messages "admin_panel"}}</a>
     </div>
+    {{end}}
+
+    {{if .AppVersion}}
+    <div class="rail-meta">
+        <span class="rail-status-dot"></span>
+        <span>Online</span>
+        <a class="rail-version" href="https://github.com/mirkochipdotcom/LdavSync" target="_blank" rel="noopener noreferrer" title="Repository GitHub LdavSync">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="none"><path d="M12 .3a12 12 0 00-3.8 23.4c.6.1.8-.3.8-.6v-2.2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1.1-.8.1-.7.1-.7 1.2.1 1.9 1.2 1.9 1.2 1.1 1.9 2.9 1.3 3.6 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.4-1.3-5.4-5.9 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 016 0c2.3-1.5 3.3-1.2 3.3-1.2.6 1.7.2 2.9.1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.7 5.6-5.4 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0012 .3z"/></svg>
+            {{.AppVersion}}
+        </a>
+    </div>
+    <script>
+        (function () {
+            var initial = {{.AppVersion}};
+            function check() {
+                fetch('/version').then(function (r) { return r.json(); }).then(function (d) {
+                    if (d && d.version && d.version !== initial && !document.getElementById('version-toast')) {
+                        var t = document.createElement('div');
+                        t.id = 'version-toast';
+                        t.className = 'version-toast';
+                        var msg = document.createElement('div');
+                        msg.innerHTML = '<strong>Nuova versione disponibile (' + d.version + ')</strong><div>Ricarica la pagina per applicare gli aggiornamenti.</div>';
+                        var btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.textContent = 'Ricarica ora';
+                        btn.onclick = function () { location.reload(); };
+                        t.appendChild(msg);
+                        t.appendChild(btn);
+                        document.body.appendChild(t);
+                    }
+                }).catch(function () {});
+            }
+            setInterval(check, 60000);
+        })();
+    </script>
     {{end}}
 </nav>
