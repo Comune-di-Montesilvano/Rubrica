@@ -1,73 +1,60 @@
-<div class="mb-4">
-    <button onclick="document.getElementById('create-group-form').classList.toggle('hidden')"
-            class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
+<div class="section-head">
+    <h3>{{index .Messages "group_numbers"}}</h3>
+    <button class="btn btn-ghost" style="flex:none;" onclick="document.getElementById('addform').classList.toggle('open')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
         {{index .Messages "add_group"}}
     </button>
 </div>
 
-<div id="create-group-form" class="hidden mb-6 p-4 border rounded bg-gray-50">
-    <h3 class="font-semibold mb-3">{{index .Messages "add_group"}}</h3>
+<div class="add-group-form" id="addform">
     <form hx-post="/admin/groups" hx-target="#groups-content" hx-swap="outerHTML">
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
-            <input type="text" name="number" placeholder="{{index .Messages "number"}}" required
-                   class="shadow border rounded py-2 px-3 text-gray-700">
-            <input type="text" name="name" placeholder="{{index .Messages "name"}}" required
-                   class="shadow border rounded py-2 px-3 text-gray-700">
-            <input type="text" name="description" placeholder="{{index .Messages "description"}}"
-                   class="shadow border rounded py-2 px-3 text-gray-700">
+        <div class="field-row">
+            <input type="text" name="number" placeholder="{{index .Messages "number"}}" required class="input">
+            <input type="text" name="name" placeholder="{{index .Messages "name"}}" required class="input">
+            <input type="text" name="description" placeholder="{{index .Messages "description"}}" class="input">
         </div>
-        <button type="submit" class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">
-            {{index .Messages "save"}}
-        </button>
+        <button type="submit" class="btn btn-primary" style="flex:none;">{{index .Messages "save"}}</button>
     </form>
 </div>
 
-<table class="min-w-full divide-y divide-gray-200">
-    <thead class="bg-gray-50">
+<table>
+    <thead>
         <tr>
-            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{{index .Messages "number"}}</th>
-            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{{index .Messages "name"}}</th>
-            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{{index .Messages "description"}}</th>
-            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{{index .Messages "members"}}</th>
-            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{{index .Messages "actions"}}</th>
+            <th>{{index .Messages "number"}}</th>
+            <th>{{index .Messages "name"}}</th>
+            <th>{{index .Messages "description"}}</th>
+            <th>{{index .Messages "members"}}</th>
+            <th></th>
         </tr>
     </thead>
-    <tbody class="bg-white divide-y divide-gray-200">
+    <tbody>
         {{range .Groups}}
         <tr>
-            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{{.Group.Number}}</td>
-            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{{.Group.Name}}</td>
-            <td class="px-6 py-4 text-sm text-gray-500">{{.Group.Description}}</td>
-            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{len .Members}}</td>
-            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
-                <button hx-get="/admin/groups/{{.Group.ID}}/members"
-                        hx-target="#modal-content"
-                        onclick="document.getElementById('modal').classList.remove('hidden')"
-                        class="text-blue-600 hover:text-blue-900">{{index $.Messages "members"}}</button>
-                <button hx-post="/admin/groups/{{.Group.ID}}/delete"
-                        hx-confirm="Sei sicuro?"
-                        hx-target="#groups-content"
-                        hx-swap="outerHTML"
-                        class="text-red-600 hover:text-red-900">{{index $.Messages "delete"}}</button>
+            <td class="num">{{.Group.Number}}</td>
+            <td>{{.Group.Name}}</td>
+            <td class="member-count">{{if .Group.Description}}{{.Group.Description}}{{else}}&mdash;{{end}}</td>
+            <td class="member-count">{{len .Members}}</td>
+            <td>
+                <div class="row-actions">
+                    <button hx-get="/admin/groups/{{.Group.ID}}/members" hx-target="#modal-content"
+                            onclick="document.getElementById('modal').removeAttribute('hidden')"
+                            class="btn btn-ghost">{{index $.Messages "members"}}</button>
+                    <button hx-post="/admin/groups/{{.Group.ID}}/delete" hx-confirm="Sei sicuro?"
+                            hx-target="#groups-content" hx-swap="outerHTML"
+                            class="btn-danger">{{index $.Messages "delete"}}</button>
+                </div>
             </td>
         </tr>
         {{end}}
     </tbody>
 </table>
 
-<div id="modal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full">
-    <div class="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
-        <div class="flex justify-between items-center mb-4">
-            <h3 class="text-lg font-semibold">{{index .Messages "members"}}</h3>
-            <button onclick="document.getElementById('modal').classList.add('hidden')"
-                    class="text-gray-400 hover:text-gray-600">
-                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                </svg>
-            </button>
+<div id="modal" class="modal-overlay" hidden>
+    <div class="modal-box">
+        <div class="modal-box-head">
+            <h3>{{index .Messages "members"}}</h3>
+            <button onclick="document.getElementById('modal').setAttribute('hidden','')">&times;</button>
         </div>
-        <div id="modal-content">
-            <!-- Content loaded via HTMX -->
-        </div>
+        <div id="modal-content"></div>
     </div>
 </div>
