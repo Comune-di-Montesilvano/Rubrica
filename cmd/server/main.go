@@ -1187,6 +1187,7 @@ func pbxData(r *http.Request) map[string]interface{} {
 	filters := pbx.LoadFilters(db)
 
 	data := railData()
+	data["Messages"] = i18n.GetMessages(i18n.ResolveLocale(r))
 	data["Username"] = sessionAdminUsername(r)
 	data["Section"] = "admin-pbx"
 	data["PBXURL"] = url
@@ -1210,10 +1211,7 @@ func renderPBX(w http.ResponseWriter, r *http.Request) {
 
 // handleAdminPBX serve la pagina "Centralino" completa (navigazione diretta).
 func handleAdminPBX(w http.ResponseWriter, r *http.Request) {
-	locale := i18n.ResolveLocale(r)
-	data := pbxData(r)
-	data["Messages"] = i18n.GetMessages(locale)
-	templates.ExecuteTemplate(w, "admin_page_pbx.html", data)
+	templates.ExecuteTemplate(w, "admin_page_pbx.html", pbxData(r))
 }
 
 // handleAdminSavePBXConfig salva url/utente/password/filtri del centralino.
