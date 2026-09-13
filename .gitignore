@@ -34,3 +34,6 @@ data/
 # OS
 .DS_Store
 Thumbs.db
+
+# Superpowers brainstorming companion mockups
+.superpowers/
