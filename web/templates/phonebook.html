@@ -14,18 +14,28 @@
         <main class="main">
             <div class="search">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-                <input type="search" name="q" placeholder="{{index .Messages "search_placeholder"}}"
-                       hx-get="/search" hx-trigger="keyup changed delay:500ms"
+                <input type="search" name="q" id="search-q" placeholder="{{index .Messages "search_placeholder"}}"
+                       hx-get="/search" hx-trigger="keyup changed delay:500ms" hx-include="#only-number"
                        hx-target="#search-results" hx-swap="innerHTML">
+            </div>
+
+            <div class="toolbar">
+                <label class="toolbar-check">
+                    <input type="checkbox" id="only-number" name="only_number"
+                           hx-get="/search" hx-trigger="change" hx-include="#search-q"
+                           hx-target="#search-results" hx-swap="innerHTML">
+                    Solo con numero
+                </label>
+                <button type="button" class="toolbar-link" id="toggle-groups-btn" onclick="toggleAllGroups()">Comprimi tutto</button>
             </div>
 
             <div class="prefix-helper" id="prefix-helper">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>
-                <span>{{index .Messages "prefix_helper"}}</span>
+                <span>{{.PrefixHelperText}}</span>
                 <button type="button" onclick="document.getElementById('prefix-helper').hidden = true; try { localStorage.setItem('ldavsync-prefix-helper-dismissed', '1'); } catch(e) {}" aria-label="Chiudi">&times;</button>
             </div>
 
-            <div id="search-results" hx-get="/search" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
+            <div id="search-results" hx-get="/search{{if .InitialGroup}}?group={{.InitialGroup}}{{end}}" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
                 <div class="loading-spinner"><p>Caricamento contatti...</p></div>
             </div>
         </main>
@@ -35,6 +45,12 @@
         function setActiveArea(btn) {
             document.querySelectorAll('.rail-item').forEach(function (i) { i.classList.remove('active'); });
             btn.classList.add('active');
+        }
+        function toggleAllGroups() {
+            var details = document.querySelectorAll('#search-results details.dept');
+            var anyOpen = Array.prototype.some.call(details, function (d) { return d.open; });
+            details.forEach(function (d) { d.open = !anyOpen; });
+            document.getElementById('toggle-groups-btn').textContent = anyOpen ? 'Espandi tutto' : 'Comprimi tutto';
         }
         try {
             if (localStorage.getItem('ldavsync-prefix-helper-dismissed') === '1') {

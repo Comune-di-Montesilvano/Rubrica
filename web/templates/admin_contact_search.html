@@ -10,7 +10,7 @@
             <span class="name">{{.DisplayName}}</span>
             {{if .Department}}<span class="role">{{sentenceCase .Department}}</span>{{end}}
         </span>
-        <span class="role">{{if .PrimaryNumber}}{{.PrimaryNumber}}{{else if .LDAPExt}}int. {{.LDAPExt}}{{end}}</span>
+        <span class="role">{{if .LDAPExt}}int. {{.LDAPExt}}{{else if .PrimaryNumber}}{{.PrimaryNumber}}{{end}}</span>
     </button>
     {{end}}
 </div>

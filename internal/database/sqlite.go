@@ -34,6 +34,16 @@ type Contact struct {
 	UpdatedAt      time.Time
 }
 
+// Area rappresenta un'area organizzativa (Interni/Esterni/Politica di
+// default, ma editabile: l'admin può crearne/rinominarne/eliminarne).
+type Area struct {
+	ID        int64
+	Key       string
+	Name      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 type GroupNumber struct {
 	ID          int64
 	Number      string
@@ -134,6 +144,14 @@ func (db *DB) migrate() error {
 		value TEXT NOT NULL,
 		updated_at DATETIME NOT NULL
 	);
+
+	CREATE TABLE IF NOT EXISTS areas (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		key TEXT NOT NULL UNIQUE,
+		name TEXT NOT NULL,
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL
+	);
 	`
 
 	if _, err := db.Exec(schema); err != nil {
@@ -152,6 +170,24 @@ func (db *DB) migrate() error {
 			// Ignore "duplicate column name" errors (SQLite error: "duplicate column name")
 			if !strings.Contains(err.Error(), "duplicate column name") {
 				log.Printf("[DATABASE] Warning during migration: %v", err)
+			}
+		}
+	}
+
+	// Seed delle 3 aree storiche, solo se la tabella è vuota (prima
+	// installazione o DB precedente all'introduzione del CRUD aree).
+	// Da qui in poi le aree sono dati editabili da admin, non più fisse.
+	var areaCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM areas`).Scan(&areaCount); err == nil && areaCount == 0 {
+		now := time.Now()
+		defaults := []struct{ key, name string }{
+			{"interni", "Interni"},
+			{"esterni", "Esterni"},
+			{"politica", "Politica"},
+		}
+		for _, d := range defaults {
+			if _, err := db.Exec(`INSERT INTO areas (key, name, created_at, updated_at) VALUES (?, ?, ?, ?)`, d.key, d.name, now, now); err != nil {
+				log.Printf("[DATABASE] Warning seeding default area %q: %v", d.key, err)
 			}
 		}
 	}
@@ -232,13 +268,13 @@ func (db *DB) SearchContacts(query string, limit int) ([]*Contact, error) {
 	FROM contacts
 	WHERE deleted_at IS NULL
 	AND (email IS NOT NULL AND email != '' OR ldap_ext IS NOT NULL AND ldap_ext != '' OR primary_number IS NOT NULL AND primary_number != '')
-	AND (display_name LIKE ? OR email LIKE ? OR ldap_ext LIKE ? OR primary_number LIKE ? OR department LIKE ?)
+	AND (display_name LIKE ? OR email LIKE ? OR ldap_ext LIKE ? OR primary_number LIKE ? OR department LIKE ? OR description LIKE ?)
 	ORDER BY display_name
 	LIMIT ?
 	`
 
 	pattern := "%" + query + "%"
-	rows, err := db.Query(searchQuery, pattern, pattern, pattern, pattern, pattern, limit)
+	rows, err := db.Query(searchQuery, pattern, pattern, pattern, pattern, pattern, pattern, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search contacts: %w", err)
 	}
@@ -428,6 +464,74 @@ func (db *DB) ListContactsWithNumber(limit int) ([]*Contact, error) {
 		contacts = append(contacts, contact)
 	}
 	return contacts, nil
+}
+
+// Area operations
+
+// ListAreas returns all areas, alphabetically by name.
+func (db *DB) ListAreas() ([]*Area, error) {
+	rows, err := db.Query(`SELECT id, key, name, created_at, updated_at FROM areas ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list areas: %w", err)
+	}
+	defer rows.Close()
+
+	var areas []*Area
+	for rows.Next() {
+		a := &Area{}
+		if err := rows.Scan(&a.ID, &a.Key, &a.Name, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan area: %w", err)
+		}
+		areas = append(areas, a)
+	}
+	return areas, nil
+}
+
+// CreateArea inserts a new area. Key must be unique (usato come valore di
+// contacts.area e come chiave nel mapping OU->Area).
+func (db *DB) CreateArea(a *Area) error {
+	now := time.Now()
+	a.CreatedAt = now
+	a.UpdatedAt = now
+
+	result, err := db.Exec(`INSERT INTO areas (key, name, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+		a.Key, a.Name, a.CreatedAt, a.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("failed to create area: %w", err)
+	}
+	id, _ := result.LastInsertId()
+	a.ID = id
+	return nil
+}
+
+// RenameArea updates only the display Name — Key resta stabile perché è
+// referenziato da contacts.area e dal mapping OU->Area salvato altrove.
+func (db *DB) RenameArea(id int64, name string) error {
+	_, err := db.Exec(`UPDATE areas SET name = ?, updated_at = ? WHERE id = ?`, name, time.Now(), id)
+	if err != nil {
+		return fmt.Errorf("failed to rename area: %w", err)
+	}
+	return nil
+}
+
+// DeleteArea removes an area and clears it from any contact currently
+// assigned to it (torna "nessuna area" invece di un riferimento pendente).
+func (db *DB) DeleteArea(id int64) error {
+	var key string
+	if err := db.QueryRow(`SELECT key FROM areas WHERE id = ?`, id).Scan(&key); err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return fmt.Errorf("failed to look up area: %w", err)
+	}
+
+	if _, err := db.Exec(`DELETE FROM areas WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("failed to delete area: %w", err)
+	}
+	if _, err := db.Exec(`UPDATE contacts SET area = '' WHERE area = ?`, key); err != nil {
+		return fmt.Errorf("failed to clear area from contacts: %w", err)
+	}
+	return nil
 }
 
 // Group operations

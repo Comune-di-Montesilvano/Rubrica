@@ -104,6 +104,62 @@ func TestSoftDeleteStale(t *testing.T) {
 	}
 }
 
+func TestAreaCRUD(t *testing.T) {
+	db := newTestDB(t)
+
+	areas, err := db.ListAreas()
+	if err != nil {
+		t.Fatalf("ListAreas failed: %v", err)
+	}
+	if len(areas) != 3 {
+		t.Fatalf("got %d seeded areas, want 3 (interni/esterni/politica)", len(areas))
+	}
+
+	a := &Area{Key: "estero", Name: "Estero"}
+	if err := db.CreateArea(a); err != nil {
+		t.Fatalf("CreateArea failed: %v", err)
+	}
+	if a.ID == 0 {
+		t.Error("CreateArea did not set ID")
+	}
+
+	if err := db.RenameArea(a.ID, "Estero (nuovo)"); err != nil {
+		t.Fatalf("RenameArea failed: %v", err)
+	}
+	areas, _ = db.ListAreas()
+	found := false
+	for _, x := range areas {
+		if x.ID == a.ID && x.Name == "Estero (nuovo)" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("RenameArea did not persist new name")
+	}
+
+	c := &Contact{UID: "ext1", DisplayName: "Ext1", Area: "estero", LastSync: time.Now()}
+	if err := db.UpsertContact(c); err != nil {
+		t.Fatalf("UpsertContact failed: %v", err)
+	}
+
+	if err := db.DeleteArea(a.ID); err != nil {
+		t.Fatalf("DeleteArea failed: %v", err)
+	}
+	areas, _ = db.ListAreas()
+	for _, x := range areas {
+		if x.ID == a.ID {
+			t.Error("area should be gone after DeleteArea")
+		}
+	}
+	got, _ := db.GetContact("ext1")
+	if got == nil {
+		t.Fatal("contact should still exist after its area is deleted")
+	}
+	if got.Area != "" {
+		t.Errorf("contact.Area = %q after DeleteArea, want empty", got.Area)
+	}
+}
+
 func TestCountByArea(t *testing.T) {
 	db := newTestDB(t)
 	contacts := []*Contact{
