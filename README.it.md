@@ -142,7 +142,7 @@ Per Android, usa un'app compatibile con CardDAV come **DAVx⁵**:
 
 ### Prerequisiti
 
-- Go 1.22+
+- Go 1.25+
 - Docker/Podman (opzionale)
 - Server LDAP per test
 

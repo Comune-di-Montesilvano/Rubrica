@@ -29,7 +29,7 @@ docker compose up -d --build   # rebuild + redeploy against real LDAP for end-to
 **On Windows dev machines without a native C compiler**, `go build`/`go test` fail (cgo needs gcc for `go-sqlite3`). Run them in a throwaway container instead:
 
 ```bash
-MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd):/app" -w //app golang:1.22-alpine \
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd):/app" -w //app golang:1.25-alpine \
   sh -c "apk add --no-cache gcc musl-dev sqlite-dev >/dev/null 2>&1 && CGO_ENABLED=1 go test ./... -v"
 ```
 `MSYS_NO_PATHCONV=1` and the `//app` double-slash stop Git Bash from mangling the `-w` path into a Windows path.
