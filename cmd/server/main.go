@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -45,6 +46,17 @@ func main() {
 		log.Fatalf("[DATABASE] Failed to initialize: %v", err)
 	}
 	defer db.Close()
+
+	// Migrazione una tantum: se il prefisso non è mai stato salvato da
+	// admin (DB vuoto), importa il valore da .env come seed iniziale. Da
+	// qui in poi la fonte di verità è il pannello admin, non più .env.
+	if stored, _ := db.GetConfig(ldap.PrimaryNumberPrefixConfigKey); stored == "" && cfg.PrimaryNumberPrefix != "" {
+		if err := db.SetConfig(ldap.PrimaryNumberPrefixConfigKey, cfg.PrimaryNumberPrefix); err != nil {
+			log.Printf("[CONFIG] Failed to import primary_number_prefix from .env: %v", err)
+		} else {
+			log.Printf("[CONFIG] Imported primary_number_prefix from .env into DB: %s", cfg.PrimaryNumberPrefix)
+		}
+	}
 
 	// Initialize phonebook service
 	pbService = phonebook.NewService(db)
@@ -150,6 +162,8 @@ func main() {
 	admin.HandleFunc("/groups/{id}/members", handleAdminAddMember).Methods("POST")
 	admin.HandleFunc("/groups/{id}/members/{contact_id}/delete", handleAdminRemoveMember).Methods("POST")
 	admin.HandleFunc("/groups/{id}/contacts/search", handleAdminContactSearch).Methods("GET")
+	admin.HandleFunc("/ou-mapping", handleAdminOUMapping).Methods("GET")
+	admin.HandleFunc("/ou-mapping", handleAdminSaveOUMapping).Methods("POST")
 	admin.HandleFunc("/contacts/{uid}/override", handleAdminContactOverride).Methods("POST")
 
 	// CardDAV server
@@ -206,6 +220,22 @@ func requireAdmin(next http.Handler) http.Handler {
 	})
 }
 
+// sessionAdminUsername returns the logged-in admin's username, or "" if
+// the current request has no valid admin session. Used to render the
+// shared rail (rail.html) the same way on public and admin pages: a
+// logged-in admin sees the "Gestione" section and "Esci" everywhere, a
+// visitor sees only "Pannello Admin".
+func sessionAdminUsername(r *http.Request) string {
+	session, _ := store.Get(r, "ldavsync-session")
+	auth, _ := session.Values["authenticated"].(bool)
+	admin, _ := session.Values["admin"].(bool)
+	if !auth || !admin {
+		return ""
+	}
+	username, _ := session.Values["username"].(string)
+	return username
+}
+
 // Public handlers
 
 func handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -226,6 +256,8 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 		"Locale":     locale,
 		"AreaCounts": counts,
 		"Total":      total,
+		"Username":   sessionAdminUsername(r),
+		"Section":    "contacts",
 	}
 	templates.ExecuteTemplate(w, "phonebook.html", data)
 }
@@ -358,6 +390,12 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
+		if sessionAdminUsername(r) != "" {
+			// Già loggato: mostrare di nuovo il form di login sembra un
+			// logout inaspettato. Manda direttamente in admin.
+			http.Redirect(w, r, "/admin", http.StatusFound)
+			return
+		}
 		locale := i18n.ResolveLocale(r)
 		data := map[string]interface{}{
 			"Messages": i18n.GetMessages(locale),
@@ -408,12 +446,30 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	locale := i18n.ResolveLocale(r)
-	session, _ := store.Get(r, "ldavsync-session")
+
+	counts, err := db.CountByArea()
+	if err != nil {
+		log.Printf("[ADMIN] Failed to count by area: %v", err)
+		counts = map[string]int{}
+	}
+	total := 0
+	for _, n := range counts {
+		total += n
+	}
+
+	prefix, _ := db.GetConfig(ldap.PrimaryNumberPrefixConfigKey)
+	if prefix == "" {
+		prefix = cfg.PrimaryNumberPrefix
+	}
 
 	data := map[string]interface{}{
-		"Messages": i18n.GetMessages(locale),
-		"Username": session.Values["username"],
-		"LastSync": lastSync.Format("2006-01-02 15:04:05"),
+		"Messages":            i18n.GetMessages(locale),
+		"Username":            sessionAdminUsername(r),
+		"Section":             "admin",
+		"AreaCounts":          counts,
+		"Total":               total,
+		"LastSync":            lastSync.Format("2006-01-02 15:04:05"),
+		"PrimaryNumberPrefix": prefix,
 	}
 
 	templates.ExecuteTemplate(w, "admin.html", data)
@@ -434,7 +490,7 @@ func handleAdminSync(w http.ResponseWriter, r *http.Request) {
 
 func handleAdminConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
-		prefix, _ := db.GetConfig("primary_number_prefix")
+		prefix, _ := db.GetConfig(ldap.PrimaryNumberPrefixConfigKey)
 		if prefix == "" {
 			prefix = cfg.PrimaryNumberPrefix
 		}
@@ -448,12 +504,12 @@ func handleAdminConfig(w http.ResponseWriter, r *http.Request) {
 
 	// POST
 	prefix := r.FormValue("primary_number_prefix")
-	if err := db.SetConfig("primary_number_prefix", prefix); err != nil {
+	if err := db.SetConfig(ldap.PrimaryNumberPrefixConfigKey, prefix); err != nil {
 		http.Error(w, "Failed to save config", http.StatusInternalServerError)
 		return
 	}
 
-	w.Write([]byte("Config saved"))
+	w.Write([]byte("Salvato — verrà applicato al prossimo sync"))
 }
 
 func handleAdminListGroups(w http.ResponseWriter, r *http.Request) {
@@ -535,11 +591,20 @@ func handleAdminGroupMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Candidati di default: contatti con un numero già mostrati subito nel
+	// picker, prima ancora di digitare una ricerca (click = aggiungi).
+	candidates, err := db.ListContactsWithNumber(20)
+	if err != nil {
+		log.Printf("[ADMIN] Failed to list candidate contacts: %v", err)
+		candidates = nil
+	}
+
 	locale := i18n.ResolveLocale(r)
 	data := map[string]interface{}{
 		"Group":    groupWithMembers.Group,
 		"GroupID":  groupWithMembers.Group.ID,
 		"Members":  groupWithMembers.Members,
+		"Contacts": candidates,
 		"Messages": i18n.GetMessages(locale),
 	}
 
@@ -615,6 +680,91 @@ func handleAdminContactSearch(w http.ResponseWriter, r *http.Request) {
 		"GroupID":  groupID,
 	}
 	templates.ExecuteTemplate(w, "admin_contact_search.html", data)
+}
+
+// renderOUMapping re-renders the mapping OU->Area section: elenca ogni OU
+// mai vista nei dati LDAP (attivi o soft-deleted) e permette all'admin di
+// assegnarle un'area, sostituendo il vecchio hardcoded deriveArea.
+func renderOUMapping(w http.ResponseWriter, r *http.Request) {
+	dns, err := db.ListDistinctLDAPDNs()
+	if err != nil {
+		http.Error(w, "Failed to list OUs", http.StatusInternalServerError)
+		return
+	}
+
+	ouSet := make(map[string]bool)
+	for _, dn := range dns {
+		if ou := ldap.ClassificationOU(dn); ou != "" {
+			ouSet[ou] = true
+		}
+	}
+	ous := make([]string, 0, len(ouSet))
+	for ou := range ouSet {
+		ous = append(ous, ou)
+	}
+	sort.Strings(ous)
+
+	raw, _ := db.GetConfig(ldap.OUAreaMappingConfigKey)
+	mapping := ldap.DefaultOUAreaMapping
+	if raw != "" {
+		var stored map[string]string
+		if err := json.Unmarshal([]byte(raw), &stored); err == nil && len(stored) > 0 {
+			mapping = stored
+		}
+	}
+
+	locale := i18n.ResolveLocale(r)
+	data := map[string]interface{}{
+		"OUs":      ous,
+		"Mapping":  mapping,
+		"Messages": i18n.GetMessages(locale),
+	}
+	templates.ExecuteTemplate(w, "admin_ou_mapping.html", data)
+}
+
+func handleAdminOUMapping(w http.ResponseWriter, r *http.Request) {
+	renderOUMapping(w, r)
+}
+
+// handleAdminSaveOUMapping salva il mapping OU->Area scelto dall'admin e
+// avvia subito un resync in background, così l'effetto si vede senza
+// dover aspettare il prossimo ciclo orario.
+func handleAdminSaveOUMapping(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form", http.StatusBadRequest)
+		return
+	}
+
+	mapping := make(map[string]string)
+	for key, vals := range r.Form {
+		if !strings.HasPrefix(key, "area_") || len(vals) == 0 {
+			continue
+		}
+		ou := strings.TrimPrefix(key, "area_")
+		if area := strings.TrimSpace(vals[0]); area != "" {
+			mapping[ou] = area
+		}
+	}
+
+	raw, err := json.Marshal(mapping)
+	if err != nil {
+		http.Error(w, "Failed to encode mapping", http.StatusInternalServerError)
+		return
+	}
+	if err := db.SetConfig(ldap.OUAreaMappingConfigKey, string(raw)); err != nil {
+		http.Error(w, "Failed to save mapping", http.StatusInternalServerError)
+		return
+	}
+
+	go func() {
+		if err := ldap.SyncContacts(db, cfg); err != nil {
+			log.Printf("[SYNC] Resync after OU mapping change failed: %v", err)
+		} else {
+			lastSync = time.Now()
+		}
+	}()
+
+	renderOUMapping(w, r)
 }
 
 func handleAdminContactOverride(w http.ResponseWriter, r *http.Request) {

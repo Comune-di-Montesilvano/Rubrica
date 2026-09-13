@@ -1,0 +1,31 @@
+<div class="section-head">
+    <h3>Mapping OU &rarr; Area</h3>
+</div>
+<p class="helptext" style="margin:8px 0 12px;">Assegna ogni Organizational Unit vista nei dati LDAP a un'area. Le OU non assegnate non compaiono in nessun filtro Area. Il salvataggio avvia subito un resync.</p>
+
+{{if .OUs}}
+<form hx-post="/admin/ou-mapping" hx-target="#ou-mapping-content" hx-swap="innerHTML">
+    <table>
+        <thead><tr><th>OU (da LDAP)</th><th>Area</th></tr></thead>
+        <tbody>
+        {{$mapping := .Mapping}}
+        {{range .OUs}}
+        <tr>
+            <td class="num">{{.}}</td>
+            <td>
+                <select name="area_{{.}}" class="input">
+                    <option value="" {{if not (index $mapping .)}}selected{{end}}>Nessuna</option>
+                    <option value="interni" {{if eq (index $mapping .) "interni"}}selected{{end}}>Interni</option>
+                    <option value="esterni" {{if eq (index $mapping .) "esterni"}}selected{{end}}>Esterni</option>
+                    <option value="politica" {{if eq (index $mapping .) "politica"}}selected{{end}}>Politica</option>
+                </select>
+            </td>
+        </tr>
+        {{end}}
+        </tbody>
+    </table>
+    <button type="submit" class="btn btn-primary" style="flex:none;margin-top:12px;">{{index .Messages "save"}}</button>
+</form>
+{{else}}
+<p class="helptext">Nessuna OU trovata — attendi il primo sync.</p>
+{{end}}

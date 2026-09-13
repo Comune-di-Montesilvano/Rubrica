@@ -7,7 +7,7 @@
                hx-get="/admin/groups/{{.Group.ID}}/contacts/search"
                hx-trigger="keyup changed delay:300ms"
                hx-target="#contact-search-results" hx-swap="innerHTML">
-        <div id="contact-search-results"></div>
+        <div id="contact-search-results">{{template "admin_contact_search.html" .}}</div>
     </div>
 
     {{template "admin_members_list.html" .}}

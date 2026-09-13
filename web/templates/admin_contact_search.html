@@ -6,8 +6,11 @@
             hx-vals='{"contact_id": "{{.ID}}"}'
             hx-target="#members-list" hx-swap="outerHTML"
             onclick="this.closest('.search-dropdown').remove()">
-        <span class="name">{{.DisplayName}}</span>
-        {{if .Department}}<span class="role">{{sentenceCase .Department}}</span>{{end}}
+        <span class="who">
+            <span class="name">{{.DisplayName}}</span>
+            {{if .Department}}<span class="role">{{sentenceCase .Department}}</span>{{end}}
+        </span>
+        <span class="role">{{if .PrimaryNumber}}{{.PrimaryNumber}}{{else if .LDAPExt}}int. {{.LDAPExt}}{{end}}</span>
     </button>
     {{end}}
 </div>

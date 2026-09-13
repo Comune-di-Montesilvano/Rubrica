@@ -9,24 +9,7 @@
 </head>
 <body>
     <div class="shell">
-        <nav class="rail">
-            <a href="/" class="rail-brand">Ldav<span>Sync</span> <span style="color:var(--ink-soft);font-weight:400;font-size:12px;">/ admin</span></a>
-            <div class="rail-group">Gestione</div>
-            <div class="rail-item active">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="7" height="7" rx="1"/><rect x="14" y="4" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-                <span>{{index .Messages "admin_panel"}}</span>
-            </div>
-            <a href="/" class="rail-item">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg>
-                <span>{{index .Messages "contacts"}}</span>
-            </a>
-            <div class="rail-foot">
-                {{.Username}}<br>
-                <form method="POST" action="/logout" style="margin:0;">
-                    <button type="submit" style="background:none;border:none;padding:0;color:var(--danger);font-size:12px;cursor:pointer;">{{index .Messages "logout"}}</button>
-                </form>
-            </div>
-        </nav>
+        {{template "rail.html" .}}
 
         <main class="main" style="max-width:920px;">
             <h1 class="page-title">{{index .Messages "admin_panel"}}</h1>
@@ -42,14 +25,19 @@
                 </div>
                 <div class="card">
                     <h3>{{index .Messages "primary_number_prefix"}}</h3>
-                    <form hx-post="/admin/config" hx-swap="none" class="field-row">
-                        <input type="text" name="primary_number_prefix" placeholder="0854321{ext}" class="input">
+                    <form hx-post="/admin/config" hx-target="#config-status" hx-swap="innerHTML" class="field-row">
+                        <input type="text" name="primary_number_prefix" value="{{.PrimaryNumberPrefix}}" placeholder="0854321{ext}" class="input">
                         <button type="submit" class="btn btn-ghost" style="flex:none;">{{index .Messages "save"}}</button>
                     </form>
+                    <span id="config-status" class="helptext"></span>
                 </div>
             </div>
 
             <div id="groups-content" hx-get="/admin/groups" hx-trigger="load" hx-swap="innerHTML">
+                <p class="helptext">Caricamento...</p>
+            </div>
+
+            <div id="ou-mapping-content" hx-get="/admin/ou-mapping" hx-trigger="load" hx-swap="innerHTML" style="margin-top:28px;">
                 <p class="helptext">Caricamento...</p>
             </div>
         </main>
