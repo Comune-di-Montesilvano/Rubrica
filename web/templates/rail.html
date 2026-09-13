@@ -48,6 +48,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.6 9.6a2 2 0 010 2.8l-8.2 8.2a2 2 0 01-2.8 0L3 14V3h11l6.6 6.6z"/><circle cx="7.5" cy="7.5" r="1.2" fill="currentColor" stroke="none"/></svg>
         <span>Aree</span>
     </a>
+    <a href="/admin/local-contacts" class="rail-item{{if eq .Section "admin-contacts"}} active{{end}}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3"/><path d="M5 20c0-3.9 3.1-7 7-7s7 3.1 7 7"/><path d="M19 8v4M21 10h-4"/></svg>
+        <span>Contatti locali</span>
+    </a>
     <div class="rail-foot">
         {{.Username}}<br>
         <form method="POST" action="/logout" style="margin:0;">

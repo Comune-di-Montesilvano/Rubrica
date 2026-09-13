@@ -65,6 +65,89 @@ func TestUpsertContactRespectsManualOverrideForArea(t *testing.T) {
 	}
 }
 
+func TestManualContactCRUD(t *testing.T) {
+	db := newTestDB(t)
+
+	c := &Contact{UID: "manual-mario-esterno", DisplayName: "Mario Esterno", Email: "mario@fornitore.it", Area: "esterni"}
+	if err := db.CreateManualContact(c); err != nil {
+		t.Fatalf("CreateManualContact failed: %v", err)
+	}
+	if c.ID == 0 {
+		t.Error("CreateManualContact did not set ID")
+	}
+	if c.Source != "manual" {
+		t.Errorf("Source = %q, want manual", c.Source)
+	}
+
+	got, err := db.GetContact("manual-mario-esterno")
+	if err != nil {
+		t.Fatalf("GetContact failed: %v", err)
+	}
+	if got == nil || got.Source != "manual" {
+		t.Fatalf("GetContact did not return the manual contact correctly: %+v", got)
+	}
+
+	manuals, err := db.ListManualContacts()
+	if err != nil {
+		t.Fatalf("ListManualContacts failed: %v", err)
+	}
+	if len(manuals) != 1 {
+		t.Fatalf("got %d manual contacts, want 1", len(manuals))
+	}
+
+	c.DisplayName = "Mario Esterno (rinominato)"
+	c.PrimaryNumber = "3331234567"
+	if err := db.UpdateManualContact(c); err != nil {
+		t.Fatalf("UpdateManualContact failed: %v", err)
+	}
+	got, _ = db.GetContact("manual-mario-esterno")
+	if got.DisplayName != "Mario Esterno (rinominato)" || got.PrimaryNumber != "3331234567" {
+		t.Errorf("UpdateManualContact did not persist changes: %+v", got)
+	}
+
+	if err := db.DeleteManualContact("manual-mario-esterno"); err != nil {
+		t.Fatalf("DeleteManualContact failed: %v", err)
+	}
+	got, _ = db.GetContact("manual-mario-esterno")
+	if got != nil {
+		t.Error("contact should be gone after DeleteManualContact")
+	}
+}
+
+func TestSoftDeleteStaleExcludesManualContacts(t *testing.T) {
+	db := newTestDB(t)
+	old := time.Now().Add(-2 * time.Hour)
+
+	ldapContact := &Contact{UID: "ldap1", DisplayName: "LDAP1", Area: "interni", LastSync: old}
+	if err := db.UpsertContact(ldapContact); err != nil {
+		t.Fatalf("UpsertContact failed: %v", err)
+	}
+
+	manual := &Contact{UID: "manual-x", DisplayName: "Manual X", Area: "esterni"}
+	if err := db.CreateManualContact(manual); err != nil {
+		t.Fatalf("CreateManualContact failed: %v", err)
+	}
+	// Il manuale ha last_sync = now (impostato da CreateManualContact),
+	// ma un sync futuro potrebbe avvenire molto dopo: verifichiamo che
+	// anche con last_sync artificialmente vecchio non venga toccato.
+	if _, err := db.Exec(`UPDATE contacts SET last_sync = ? WHERE uid = ?`, old, manual.UID); err != nil {
+		t.Fatalf("failed to backdate manual contact: %v", err)
+	}
+
+	n, err := db.SoftDeleteStale(time.Now())
+	if err != nil {
+		t.Fatalf("SoftDeleteStale failed: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("SoftDeleteStale removed %d contacts, want 1 (only the LDAP one)", n)
+	}
+
+	got, _ := db.GetContact("manual-x")
+	if got == nil {
+		t.Error("manual contact should survive SoftDeleteStale even with an old last_sync")
+	}
+}
+
 func TestSoftDeleteStale(t *testing.T) {
 	db := newTestDB(t)
 	old := time.Now().Add(-2 * time.Hour)

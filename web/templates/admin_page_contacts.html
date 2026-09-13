@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="{{.Locale}}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contatti locali - {{index .Messages "app_title"}}</title>
+    <script src="https://unpkg.com/htmx.org@2.0.0"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="shell">
+        {{template "rail.html" .}}
+        <main class="main" style="max-width:960px;">
+            <h1 class="page-title">Contatti locali</h1>
+            <div id="contacts-content">{{template "admin_contacts.html" .}}</div>
+        </main>
+    </div>
+</body>
+</html>

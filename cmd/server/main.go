@@ -170,6 +170,10 @@ func main() {
 	admin.HandleFunc("/areas", handleAdminCreateArea).Methods("POST")
 	admin.HandleFunc("/areas/{id}", handleAdminRenameArea).Methods("POST")
 	admin.HandleFunc("/areas/{id}/delete", handleAdminDeleteArea).Methods("POST")
+	admin.HandleFunc("/local-contacts", handleAdminContacts).Methods("GET")
+	admin.HandleFunc("/local-contacts", handleAdminCreateContact).Methods("POST")
+	admin.HandleFunc("/local-contacts/{uid}", handleAdminUpdateContact).Methods("POST")
+	admin.HandleFunc("/local-contacts/{uid}/delete", handleAdminDeleteContact).Methods("POST")
 	admin.HandleFunc("/contacts/{uid}/override", handleAdminContactOverride).Methods("POST")
 
 	// CardDAV server
@@ -1009,6 +1013,131 @@ func handleAdminDeleteArea(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[ADMIN] Failed to delete area %d: %v", id, err)
 	}
 	renderAdminAreas(w, r)
+}
+
+// Contatti locali (manuali, extra-dominio) — CRUD separato dai contatti
+// LDAP: sono l'unico posto dove si può creare/modificare/eliminare un
+// contatto direttamente, invece di override su un dato sincronizzato.
+
+// generateManualUID produce uno UID univoco per un contatto manuale, col
+// prefisso "manual-" per non poter mai collidere con uno UID reale
+// proveniente da LDAP (che non usa mai questo prefisso).
+func generateManualUID(name string) string {
+	base := "manual-" + slugify(name)
+	if base == "manual-" {
+		base = "manual-contatto"
+	}
+	uid := base
+	for i := 2; ; i++ {
+		existing, err := db.GetContact(uid)
+		if err != nil || existing == nil {
+			return uid
+		}
+		uid = fmt.Sprintf("%s-%d", base, i)
+	}
+}
+
+// renderAdminContacts re-renders solo il frammento (usato dopo
+// crea/modifica/elimina via HTMX).
+func renderAdminContacts(w http.ResponseWriter, r *http.Request) {
+	contacts, err := db.ListManualContacts()
+	if err != nil {
+		http.Error(w, "Failed to list contacts", http.StatusInternalServerError)
+		return
+	}
+	areas, err := db.ListAreas()
+	if err != nil {
+		log.Printf("[ADMIN] Failed to list areas: %v", err)
+	}
+
+	locale := i18n.ResolveLocale(r)
+	data := map[string]interface{}{
+		"Contacts": contacts,
+		"Areas":    areas,
+		"Messages": i18n.GetMessages(locale),
+	}
+	templates.ExecuteTemplate(w, "admin_contacts.html", data)
+}
+
+// handleAdminContacts serve la pagina "Contatti locali" completa
+// (navigazione diretta) — le scritture continuano a ricevere solo il
+// frammento via renderAdminContacts.
+func handleAdminContacts(w http.ResponseWriter, r *http.Request) {
+	contacts, err := db.ListManualContacts()
+	if err != nil {
+		http.Error(w, "Failed to list contacts", http.StatusInternalServerError)
+		return
+	}
+	areas, err := db.ListAreas()
+	if err != nil {
+		log.Printf("[ADMIN] Failed to list areas: %v", err)
+	}
+
+	locale := i18n.ResolveLocale(r)
+	data := railData()
+	data["Contacts"] = contacts
+	data["Areas"] = areas
+	data["Username"] = sessionAdminUsername(r)
+	data["Section"] = "admin-contacts"
+	data["Messages"] = i18n.GetMessages(locale)
+
+	templates.ExecuteTemplate(w, "admin_page_contacts.html", data)
+}
+
+func handleAdminCreateContact(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.FormValue("display_name"))
+	if name == "" {
+		renderAdminContacts(w, r)
+		return
+	}
+
+	c := &database.Contact{
+		UID:           generateManualUID(name),
+		DisplayName:   name,
+		Email:         strings.TrimSpace(r.FormValue("email")),
+		PrimaryNumber: strings.TrimSpace(r.FormValue("primary_number")),
+		Department:    strings.TrimSpace(r.FormValue("department")),
+		Description:   strings.TrimSpace(r.FormValue("description")),
+		Area:          strings.TrimSpace(r.FormValue("area")),
+	}
+	if err := db.CreateManualContact(c); err != nil {
+		log.Printf("[ADMIN] Failed to create manual contact %q: %v", name, err)
+	}
+	renderAdminContacts(w, r)
+}
+
+func handleAdminUpdateContact(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	uid := vars["uid"]
+	name := strings.TrimSpace(r.FormValue("display_name"))
+	if name == "" {
+		renderAdminContacts(w, r)
+		return
+	}
+
+	c := &database.Contact{
+		UID:           uid,
+		DisplayName:   name,
+		Email:         strings.TrimSpace(r.FormValue("email")),
+		PrimaryNumber: strings.TrimSpace(r.FormValue("primary_number")),
+		Department:    strings.TrimSpace(r.FormValue("department")),
+		Description:   strings.TrimSpace(r.FormValue("description")),
+		Area:          strings.TrimSpace(r.FormValue("area")),
+	}
+	if err := db.UpdateManualContact(c); err != nil {
+		log.Printf("[ADMIN] Failed to update manual contact %q: %v", uid, err)
+	}
+	renderAdminContacts(w, r)
+}
+
+func handleAdminDeleteContact(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	uid := vars["uid"]
+
+	if err := db.DeleteManualContact(uid); err != nil {
+		log.Printf("[ADMIN] Failed to delete manual contact %q: %v", uid, err)
+	}
+	renderAdminContacts(w, r)
 }
 
 func handleAdminContactOverride(w http.ResponseWriter, r *http.Request) {

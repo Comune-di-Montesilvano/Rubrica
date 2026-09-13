@@ -27,6 +27,7 @@ type Contact struct {
 	LDAPGroups     string
 	LDAPDN         string
 	Area           string
+	Source         string // "ldap" (sincronizzato, default) o "manual" (creato da admin)
 	ManualOverride bool
 	DeletedAt      *time.Time
 	LastSync       time.Time
@@ -163,6 +164,7 @@ func (db *DB) migrate() error {
 		"ALTER TABLE contacts ADD COLUMN title TEXT",
 		"ALTER TABLE contacts ADD COLUMN description TEXT",
 		"ALTER TABLE contacts ADD COLUMN area TEXT",
+		"ALTER TABLE contacts ADD COLUMN source TEXT DEFAULT 'ldap'",
 	}
 
 	for _, stmt := range alterStatements {
@@ -242,14 +244,14 @@ func (db *DB) UpsertContact(contact *Contact) error {
 
 func (db *DB) GetContact(uid string) (*Contact, error) {
 	query := `
-	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, manual_override, deleted_at, last_sync, created_at, updated_at
+	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, manual_override, deleted_at, last_sync, created_at, updated_at
 	FROM contacts
 	WHERE uid = ? AND deleted_at IS NULL
 	`
 
 	contact := &Contact{}
 	err := db.QueryRow(query, uid).Scan(&contact.ID, &contact.UID, &contact.DisplayName, &contact.Email,
-		&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.ManualOverride,
+		&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.ManualOverride,
 		&contact.DeletedAt, &contact.LastSync, &contact.CreatedAt, &contact.UpdatedAt)
 
 	if err == sql.ErrNoRows {
@@ -264,7 +266,7 @@ func (db *DB) GetContact(uid string) (*Contact, error) {
 
 func (db *DB) SearchContacts(query string, limit int) ([]*Contact, error) {
 	searchQuery := `
-	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, manual_override, deleted_at, last_sync, created_at, updated_at
+	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, manual_override, deleted_at, last_sync, created_at, updated_at
 	FROM contacts
 	WHERE deleted_at IS NULL
 	AND (email IS NOT NULL AND email != '' OR ldap_ext IS NOT NULL AND ldap_ext != '' OR primary_number IS NOT NULL AND primary_number != '')
@@ -284,7 +286,7 @@ func (db *DB) SearchContacts(query string, limit int) ([]*Contact, error) {
 	for rows.Next() {
 		contact := &Contact{}
 		err := rows.Scan(&contact.ID, &contact.UID, &contact.DisplayName, &contact.Email,
-			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.ManualOverride,
+			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.ManualOverride,
 			&contact.DeletedAt, &contact.LastSync, &contact.CreatedAt, &contact.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan contact: %w", err)
@@ -297,7 +299,7 @@ func (db *DB) SearchContacts(query string, limit int) ([]*Contact, error) {
 
 func (db *DB) ListContacts(limit, offset int) ([]*Contact, error) {
 	query := `
-	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, manual_override, deleted_at, last_sync, created_at, updated_at
+	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, manual_override, deleted_at, last_sync, created_at, updated_at
 	FROM contacts
 	WHERE deleted_at IS NULL
 	AND (email IS NOT NULL AND email != '' OR ldap_ext IS NOT NULL AND ldap_ext != '' OR primary_number IS NOT NULL AND primary_number != '')
@@ -315,7 +317,7 @@ func (db *DB) ListContacts(limit, offset int) ([]*Contact, error) {
 	for rows.Next() {
 		contact := &Contact{}
 		err := rows.Scan(&contact.ID, &contact.UID, &contact.DisplayName, &contact.Email,
-			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.ManualOverride,
+			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.ManualOverride,
 			&contact.DeletedAt, &contact.LastSync, &contact.CreatedAt, &contact.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan contact: %w", err)
@@ -329,7 +331,7 @@ func (db *DB) ListContacts(limit, offset int) ([]*Contact, error) {
 // ListAllContacts returns all contacts without filtering (for CardDAV)
 func (db *DB) ListAllContacts(limit, offset int) ([]*Contact, error) {
 	query := `
-	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, manual_override, deleted_at, last_sync, created_at, updated_at
+	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, manual_override, deleted_at, last_sync, created_at, updated_at
 	FROM contacts
 	WHERE deleted_at IS NULL
 	ORDER BY display_name
@@ -346,7 +348,7 @@ func (db *DB) ListAllContacts(limit, offset int) ([]*Contact, error) {
 	for rows.Next() {
 		contact := &Contact{}
 		err := rows.Scan(&contact.ID, &contact.UID, &contact.DisplayName, &contact.Email,
-			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.ManualOverride,
+			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.ManualOverride,
 			&contact.DeletedAt, &contact.LastSync, &contact.CreatedAt, &contact.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan contact: %w", err)
@@ -409,18 +411,104 @@ func (db *DB) CountByArea() (map[string]int, error) {
 }
 
 // SoftDeleteStale marca come cancellato (deleted_at) qualsiasi contatto
-// attivo il cui last_sync sia precedente a syncTime — cioè non è stato
-// toccato dal giro di sync corrente (disabilitato, spostato, rimosso da
-// AD). Ritorna quanti sono stati appena soft-deleted.
+// attivo di origine LDAP il cui last_sync sia precedente a syncTime —
+// cioè non è stato toccato dal giro di sync corrente (disabilitato,
+// spostato, rimosso da AD). I contatti source='manual' non sono mai
+// toccati: non passano mai da un sync, quindi il loro last_sync
+// resterebbe sempre "vecchio" e finirebbero cancellati al primo giro
+// successivo alla creazione se non fossero esclusi qui. Ritorna quanti
+// sono stati appena soft-deleted.
 func (db *DB) SoftDeleteStale(syncTime time.Time) (int64, error) {
 	result, err := db.Exec(
-		`UPDATE contacts SET deleted_at = ?, updated_at = ? WHERE deleted_at IS NULL AND last_sync < ?`,
+		`UPDATE contacts SET deleted_at = ?, updated_at = ? WHERE deleted_at IS NULL AND source = 'ldap' AND last_sync < ?`,
 		syncTime, syncTime, syncTime,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("failed to soft-delete stale contacts: %w", err)
 	}
 	return result.RowsAffected()
+}
+
+// Manual contact operations (source='manual', contatti extra-dominio
+// creati da admin, mai toccati dal sync/reconciliation LDAP)
+
+// CreateManualContact inserisce un contatto con source='manual'. UID deve
+// già essere univoco (generato dal chiamante, vedi slugify in main.go).
+func (db *DB) CreateManualContact(c *Contact) error {
+	now := time.Now()
+	c.Source = "manual"
+	c.LastSync = now
+	c.CreatedAt = now
+	c.UpdatedAt = now
+
+	result, err := db.Exec(
+		// ldap_ext/title/ldap_groups/ldap_dn non hanno senso per un contatto
+		// manuale, ma vanno inseriti come stringa vuota (non NULL): lo Scan
+		// condiviso con i contatti LDAP usa string semplici, non sql.NullString.
+		`INSERT INTO contacts (uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, manual_override, last_sync, created_at, updated_at)
+		VALUES (?, ?, ?, '', ?, ?, '', ?, '', '', ?, 'manual', 0, ?, ?, ?)`,
+		c.UID, c.DisplayName, c.Email, c.PrimaryNumber, c.Department, c.Description, c.Area, c.LastSync, c.CreatedAt, c.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create manual contact: %w", err)
+	}
+	id, _ := result.LastInsertId()
+	c.ID = id
+	return nil
+}
+
+// UpdateManualContact aggiorna i campi editabili di un contatto manuale.
+// Ristretto a source='manual': non deve poter modificare un contatto
+// sincronizzato da LDAP (quello passa dall'override esistente).
+func (db *DB) UpdateManualContact(c *Contact) error {
+	_, err := db.Exec(
+		`UPDATE contacts SET display_name = ?, email = ?, primary_number = ?, department = ?, description = ?, area = ?, updated_at = ?
+		WHERE uid = ? AND source = 'manual'`,
+		c.DisplayName, c.Email, c.PrimaryNumber, c.Department, c.Description, c.Area, time.Now(), c.UID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update manual contact: %w", err)
+	}
+	return nil
+}
+
+// DeleteManualContact elimina definitivamente (non soft-delete: è un
+// dato gestito a mano, non sincronizzato) un contatto manuale. Ristretto
+// a source='manual' per non poter mai cancellare un contatto LDAP da qui.
+func (db *DB) DeleteManualContact(uid string) error {
+	_, err := db.Exec(`DELETE FROM contacts WHERE uid = ? AND source = 'manual'`, uid)
+	if err != nil {
+		return fmt.Errorf("failed to delete manual contact: %w", err)
+	}
+	return nil
+}
+
+// ListManualContacts returns all source='manual' contacts, alphabetically.
+func (db *DB) ListManualContacts() ([]*Contact, error) {
+	query := `
+	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, manual_override, deleted_at, last_sync, created_at, updated_at
+	FROM contacts
+	WHERE source = 'manual'
+	ORDER BY display_name
+	`
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list manual contacts: %w", err)
+	}
+	defer rows.Close()
+
+	var contacts []*Contact
+	for rows.Next() {
+		contact := &Contact{}
+		err := rows.Scan(&contact.ID, &contact.UID, &contact.DisplayName, &contact.Email,
+			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.ManualOverride,
+			&contact.DeletedAt, &contact.LastSync, &contact.CreatedAt, &contact.UpdatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan contact: %w", err)
+		}
+		contacts = append(contacts, contact)
+	}
+	return contacts, nil
 }
 
 // ListDistinctLDAPDNs returns the distinct ldap_dn of every contact ever
@@ -449,7 +537,7 @@ func (db *DB) ListDistinctLDAPDNs() ([]string, error) {
 // membro" del pannello admin, prima ancora di digitare una ricerca.
 func (db *DB) ListContactsWithNumber(limit int) ([]*Contact, error) {
 	query := `
-	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, manual_override, deleted_at, last_sync, created_at, updated_at
+	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, manual_override, deleted_at, last_sync, created_at, updated_at
 	FROM contacts
 	WHERE deleted_at IS NULL AND ((primary_number IS NOT NULL AND primary_number != '') OR (ldap_ext IS NOT NULL AND ldap_ext != ''))
 	ORDER BY display_name
@@ -466,7 +554,7 @@ func (db *DB) ListContactsWithNumber(limit int) ([]*Contact, error) {
 	for rows.Next() {
 		contact := &Contact{}
 		err := rows.Scan(&contact.ID, &contact.UID, &contact.DisplayName, &contact.Email,
-			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.ManualOverride,
+			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.ManualOverride,
 			&contact.DeletedAt, &contact.LastSync, &contact.CreatedAt, &contact.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan contact: %w", err)
@@ -633,7 +721,7 @@ func (db *DB) RemoveGroupMember(groupID, contactID int64) error {
 
 func (db *DB) GetGroupMembers(groupID int64) ([]*Contact, error) {
 	query := `
-	SELECT c.id, c.uid, c.display_name, c.email, c.ldap_ext, c.primary_number, c.department, c.title, c.description, c.ldap_groups, c.ldap_dn, c.area,
+	SELECT c.id, c.uid, c.display_name, c.email, c.ldap_ext, c.primary_number, c.department, c.title, c.description, c.ldap_groups, c.ldap_dn, c.area, c.source,
 	       c.manual_override, c.deleted_at, c.last_sync, c.created_at, c.updated_at
 	FROM contacts c
 	INNER JOIN group_members gm ON c.id = gm.contact_id
@@ -651,7 +739,7 @@ func (db *DB) GetGroupMembers(groupID int64) ([]*Contact, error) {
 	for rows.Next() {
 		contact := &Contact{}
 		err := rows.Scan(&contact.ID, &contact.UID, &contact.DisplayName, &contact.Email,
-			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.ManualOverride,
+			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.ManualOverride,
 			&contact.DeletedAt, &contact.LastSync, &contact.CreatedAt, &contact.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan contact: %w", err)
