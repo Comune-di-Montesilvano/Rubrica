@@ -34,7 +34,19 @@
     <div class="rail-group">Gestione</div>
     <a href="/admin" class="rail-item{{if eq .Section "admin"}} active{{end}}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="7" height="7" rx="1"/><rect x="14" y="4" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-        <span>{{index .Messages "admin_panel"}}</span>
+        <span>Panoramica</span>
+    </a>
+    <a href="/admin/groups" class="rail-item{{if eq .Section "admin-groups"}} active{{end}}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 21V10l8-6 8 6v11"/><path d="M9 21v-6h6v6"/></svg>
+        <span>{{index .Messages "group_numbers"}}</span>
+    </a>
+    <a href="/admin/ou-mapping" class="rail-item{{if eq .Section "admin-ou-mapping"}} active{{end}}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2v-4m6 4H5a2 2 0 01-2-2"/></svg>
+        <span>Mapping OU</span>
+    </a>
+    <a href="/admin/areas" class="rail-item{{if eq .Section "admin-areas"}} active{{end}}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.6 9.6a2 2 0 010 2.8l-8.2 8.2a2 2 0 01-2.8 0L3 14V3h11l6.6 6.6z"/><circle cx="7.5" cy="7.5" r="1.2" fill="currentColor" stroke="none"/></svg>
+        <span>Aree</span>
     </a>
     <div class="rail-foot">
         {{.Username}}<br>

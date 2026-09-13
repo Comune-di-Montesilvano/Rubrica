@@ -163,10 +163,11 @@ func TestAreaCRUD(t *testing.T) {
 func TestCountByArea(t *testing.T) {
 	db := newTestDB(t)
 	contacts := []*Contact{
-		{UID: "a", DisplayName: "A", Area: "interni", LastSync: time.Now()},
-		{UID: "b", DisplayName: "B", Area: "interni", LastSync: time.Now()},
-		{UID: "c", DisplayName: "C", Area: "esterni", LastSync: time.Now()},
-		{UID: "d", DisplayName: "D", Area: "politica", LastSync: time.Now()},
+		{UID: "a", DisplayName: "A", Area: "interni", PrimaryNumber: "1", LastSync: time.Now()},
+		{UID: "b", DisplayName: "B", Area: "interni", PrimaryNumber: "2", LastSync: time.Now()},
+		{UID: "c", DisplayName: "C", Area: "esterni", Email: "c@example.com", LastSync: time.Now()},
+		{UID: "d", DisplayName: "D", Area: "politica", LDAPExt: "100", LastSync: time.Now()},
+		{UID: "e", DisplayName: "E (senza recapiti)", Area: "politica", LastSync: time.Now()},
 	}
 	for _, c := range contacts {
 		if err := db.UpsertContact(c); err != nil {
@@ -178,6 +179,8 @@ func TestCountByArea(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CountByArea failed: %v", err)
 	}
+	// "e" ha area=politica ma nessun recapito: non deve essere contata,
+	// altrimenti il conteggio sidebar non combacia con ListContacts.
 	want := map[string]int{"interni": 2, "esterni": 1, "politica": 1}
 	for area, wantCount := range want {
 		if counts[area] != wantCount {

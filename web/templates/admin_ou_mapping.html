@@ -1,12 +1,12 @@
 <div class="section-head">
     <h3>Mapping OU &rarr; Area</h3>
 </div>
-<p class="helptext" style="margin:8px 0 12px;">Assegna ogni Organizational Unit vista nei dati LDAP (o aggiunta a mano) a un'area. Il salvataggio avvia subito un resync. Imposta "Nessuna" e salva per rimuovere un'associazione.</p>
+<p class="helptext" style="margin:8px 0 12px;">Assegna ogni Organizational Unit vista nei dati LDAP (o aggiunta a mano) a un'area. Salvare avvia subito un resync. "Elimina" rimuove subito quella singola associazione.</p>
 
 {{if .OUs}}
 <form hx-post="/admin/ou-mapping" hx-target="#ou-mapping-content" hx-swap="innerHTML">
     <table>
-        <thead><tr><th>OU (da LDAP)</th><th>Area</th></tr></thead>
+        <thead><tr><th>OU (da LDAP)</th><th>Area</th><th></th></tr></thead>
         <tbody>
         {{$mapping := .Mapping}}
         {{$areas := .Areas}}
@@ -21,6 +21,12 @@
                     <option value="{{.Key}}" {{if eq (index $mapping $ou) .Key}}selected{{end}}>{{.Name}}</option>
                     {{end}}
                 </select>
+            </td>
+            <td>
+                <button type="button" hx-post="/admin/ou-mapping/{{$ou}}/delete" hx-confirm="Rimuovere il mapping per {{$ou}}?"
+                        hx-target="#ou-mapping-content" hx-swap="innerHTML" class="btn-danger">
+                    {{index $.Messages "delete"}}
+                </button>
             </td>
         </tr>
         {{end}}

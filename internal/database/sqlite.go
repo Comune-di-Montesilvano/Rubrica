@@ -377,9 +377,19 @@ func (db *DB) UpdateContactOverride(uid string, email, primaryNumber string) err
 // CountByArea returns the number of active (non-deleted) contacts per
 // Area value ("interni"/"esterni"/"politica"). Contacts with no area yet
 // assigned (not re-synced since this field was added) are counted under
-// the empty string key.
+// the empty string key. Applica la stessa condizione "ha almeno un
+// recapito" di ListContacts/SearchContacts — altrimenti il conteggio in
+// sidebar non combacia con quanti contatti si vedono davvero (un
+// consigliere ex-mandato senza email/telefono/interno in AD non compare
+// mai in lista, ma veniva comunque contato).
 func (db *DB) CountByArea() (map[string]int, error) {
-	query := `SELECT COALESCE(area, '') AS area, COUNT(*) FROM contacts WHERE deleted_at IS NULL GROUP BY area`
+	query := `
+	SELECT COALESCE(area, '') AS area, COUNT(*)
+	FROM contacts
+	WHERE deleted_at IS NULL
+	AND (email IS NOT NULL AND email != '' OR ldap_ext IS NOT NULL AND ldap_ext != '' OR primary_number IS NOT NULL AND primary_number != '')
+	GROUP BY area
+	`
 	rows, err := db.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to count by area: %w", err)

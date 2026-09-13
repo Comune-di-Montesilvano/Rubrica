@@ -20,8 +20,13 @@ func TestGroupByDepartment(t *testing.T) {
 	if len(groups) != 4 {
 		t.Fatalf("got %d groups, want 4", len(groups))
 	}
-	if groups[0].Name != "Polizia Locale" || len(groups[0].Contacts) != 2 {
-		t.Errorf("groups[0] = %q with %d contacts, want Polizia Locale with 2", groups[0].Name, len(groups[0].Contacts))
+	if groups[0].Name != "Amministrazione politica" {
+		t.Errorf("groups[0].Name = %q, want alphabetically-first \"Amministrazione politica\"", groups[0].Name)
+	}
+	for i := 1; i < len(groups); i++ {
+		if groups[i-1].Name > groups[i].Name {
+			t.Errorf("groups not alphabetically sorted: %q before %q", groups[i-1].Name, groups[i].Name)
+		}
 	}
 
 	names := map[string]int{}

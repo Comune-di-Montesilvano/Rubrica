@@ -165,6 +165,7 @@ func main() {
 	admin.HandleFunc("/ou-mapping", handleAdminOUMapping).Methods("GET")
 	admin.HandleFunc("/ou-mapping", handleAdminSaveOUMapping).Methods("POST")
 	admin.HandleFunc("/ou-mapping/add", handleAdminAddOU).Methods("POST")
+	admin.HandleFunc("/ou-mapping/{ou}/delete", handleAdminDeleteOU).Methods("POST")
 	admin.HandleFunc("/areas", handleAdminAreas).Methods("GET")
 	admin.HandleFunc("/areas", handleAdminCreateArea).Methods("POST")
 	admin.HandleFunc("/areas/{id}", handleAdminRenameArea).Methods("POST")
@@ -243,12 +244,12 @@ func sessionAdminUsername(r *http.Request) string {
 
 // Public handlers
 
-func handleIndex(w http.ResponseWriter, r *http.Request) {
-	locale := i18n.ResolveLocale(r)
-
+// railData raccoglie i dati richiesti da rail.html su ogni pagina che la
+// include (pubblica o admin): conteggi/elenco Aree e stato di login.
+func railData() map[string]interface{} {
 	counts, err := db.CountByArea()
 	if err != nil {
-		log.Printf("[INDEX] Failed to count by area: %v", err)
+		log.Printf("[RAIL] Failed to count by area: %v", err)
 		counts = map[string]int{}
 	}
 	total := 0
@@ -258,9 +259,18 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 
 	areas, err := db.ListAreas()
 	if err != nil {
-		log.Printf("[INDEX] Failed to list areas: %v", err)
+		log.Printf("[RAIL] Failed to list areas: %v", err)
 	}
 
+	return map[string]interface{}{
+		"AreaCounts": counts,
+		"Total":      total,
+		"Areas":      areas,
+	}
+}
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	locale := i18n.ResolveLocale(r)
 	activeArea := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("group")))
 
 	prefix, _ := db.GetConfig(ldap.PrimaryNumberPrefixConfigKey)
@@ -269,18 +279,14 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	prefixDigits := strings.ReplaceAll(prefix, "{ext}", "")
 
-	data := map[string]interface{}{
-		"Messages":         i18n.GetMessages(locale),
-		"Locale":           locale,
-		"AreaCounts":       counts,
-		"Total":            total,
-		"Areas":            areas,
-		"ActiveArea":       activeArea,
-		"InitialGroup":     activeArea,
-		"Username":         sessionAdminUsername(r),
-		"Section":          "contacts",
-		"PrefixHelperText": i18n.T(locale, "prefix_helper", prefixDigits),
-	}
+	data := railData()
+	data["Messages"] = i18n.GetMessages(locale)
+	data["Locale"] = locale
+	data["ActiveArea"] = activeArea
+	data["InitialGroup"] = activeArea
+	data["Username"] = sessionAdminUsername(r)
+	data["Section"] = "contacts"
+	data["PrefixHelperText"] = i18n.T(locale, "prefix_helper", prefixDigits)
 	templates.ExecuteTemplate(w, "phonebook.html", data)
 }
 
@@ -479,36 +485,17 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 func handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	locale := i18n.ResolveLocale(r)
 
-	counts, err := db.CountByArea()
-	if err != nil {
-		log.Printf("[ADMIN] Failed to count by area: %v", err)
-		counts = map[string]int{}
-	}
-	total := 0
-	for _, n := range counts {
-		total += n
-	}
-
-	areas, err := db.ListAreas()
-	if err != nil {
-		log.Printf("[ADMIN] Failed to list areas: %v", err)
-	}
-
 	prefix, _ := db.GetConfig(ldap.PrimaryNumberPrefixConfigKey)
 	if prefix == "" {
 		prefix = cfg.PrimaryNumberPrefix
 	}
 
-	data := map[string]interface{}{
-		"Messages":            i18n.GetMessages(locale),
-		"Username":            sessionAdminUsername(r),
-		"Section":             "admin",
-		"AreaCounts":          counts,
-		"Total":               total,
-		"Areas":               areas,
-		"LastSync":            lastSync.Format("2006-01-02 15:04:05"),
-		"PrimaryNumberPrefix": prefix,
-	}
+	data := railData()
+	data["Messages"] = i18n.GetMessages(locale)
+	data["Username"] = sessionAdminUsername(r)
+	data["Section"] = "admin"
+	data["LastSync"] = lastSync.Format("2006-01-02 15:04:05")
+	data["PrimaryNumberPrefix"] = prefix
 
 	templates.ExecuteTemplate(w, "admin.html", data)
 }
@@ -550,8 +537,24 @@ func handleAdminConfig(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("Salvato — verrà applicato al prossimo sync"))
 }
 
+// handleAdminListGroups serve la pagina "Etichette numero" completa
+// (navigazione diretta) — le scritture (crea/elimina) continuano a
+// ricevere solo il frammento via renderAdminGroups.
 func handleAdminListGroups(w http.ResponseWriter, r *http.Request) {
-	renderAdminGroups(w, r)
+	groups, err := pbService.ListGroupsWithMembers()
+	if err != nil {
+		http.Error(w, "Failed to list groups", http.StatusInternalServerError)
+		return
+	}
+
+	locale := i18n.ResolveLocale(r)
+	data := railData()
+	data["Groups"] = groups
+	data["Username"] = sessionAdminUsername(r)
+	data["Section"] = "admin-groups"
+	data["Messages"] = i18n.GetMessages(locale)
+
+	templates.ExecuteTemplate(w, "admin_page_groups.html", data)
 }
 
 // renderAdminGroups re-renders the etichette numero table (admin_groups.html).
@@ -734,15 +737,14 @@ func loadOUMapping() map[string]string {
 	return stored
 }
 
-// renderOUMapping re-renders the mapping OU->Area section: elenca l'unione
-// delle OU viste nei dati LDAP e di quelle già mappate manualmente (una OU
-// aggiunta a mano per un contatto non ancora sincronizzato non deve
-// sparire dalla lista solo perché nessun contatto la usa ancora).
-func renderOUMapping(w http.ResponseWriter, r *http.Request) {
+// buildOUMappingData raccoglie i dati per la sezione mapping OU->Area:
+// l'unione delle OU viste nei dati LDAP e di quelle già mappate a mano
+// (una OU aggiunta manualmente per un contatto non ancora sincronizzato
+// non deve sparire dalla lista solo perché nessun contatto la usa ancora).
+func buildOUMappingData(r *http.Request) (map[string]interface{}, error) {
 	dns, err := db.ListDistinctLDAPDNs()
 	if err != nil {
-		http.Error(w, "Failed to list OUs", http.StatusInternalServerError)
-		return
+		return nil, fmt.Errorf("failed to list OUs: %w", err)
 	}
 
 	mapping := loadOUMapping()
@@ -768,11 +770,21 @@ func renderOUMapping(w http.ResponseWriter, r *http.Request) {
 	}
 
 	locale := i18n.ResolveLocale(r)
-	data := map[string]interface{}{
+	return map[string]interface{}{
 		"OUs":      ous,
 		"Mapping":  mapping,
 		"Areas":    areas,
 		"Messages": i18n.GetMessages(locale),
+	}, nil
+}
+
+// renderOUMapping re-renders solo il frammento (usato dopo save/add via
+// HTMX, che sostituisce #ou-mapping-content in place).
+func renderOUMapping(w http.ResponseWriter, r *http.Request) {
+	data, err := buildOUMappingData(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	templates.ExecuteTemplate(w, "admin_ou_mapping.html", data)
 }
@@ -815,8 +827,52 @@ func handleAdminAddOU(w http.ResponseWriter, r *http.Request) {
 	renderOUMapping(w, r)
 }
 
-func handleAdminOUMapping(w http.ResponseWriter, r *http.Request) {
+// handleAdminDeleteOU rimuove una singola associazione OU->Area,
+// indipendentemente dalle altre righe della tabella — azione esplicita,
+// non affidata al side-effect implicito di "seleziona Nessuna e salva
+// tutto" che risultava poco affidabile/scopribile.
+func handleAdminDeleteOU(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	ou := vars["ou"]
+
+	mapping := loadOUMapping()
+	updated := make(map[string]string, len(mapping))
+	for k, v := range mapping {
+		if k == ou {
+			continue
+		}
+		updated[k] = v
+	}
+
+	raw, err := json.Marshal(updated)
+	if err != nil {
+		http.Error(w, "Failed to encode mapping", http.StatusInternalServerError)
+		return
+	}
+	if err := db.SetConfig(ldap.OUAreaMappingConfigKey, string(raw)); err != nil {
+		http.Error(w, "Failed to save mapping", http.StatusInternalServerError)
+		return
+	}
+
 	renderOUMapping(w, r)
+}
+
+// handleAdminOUMapping serve la pagina "Mapping OU" completa (navigazione
+// diretta) — le scritture (save/add) continuano a ricevere solo il
+// frammento via renderOUMapping.
+func handleAdminOUMapping(w http.ResponseWriter, r *http.Request) {
+	content, err := buildOUMappingData(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	data := railData()
+	for k, v := range content {
+		data[k] = v
+	}
+	data["Username"] = sessionAdminUsername(r)
+	data["Section"] = "admin-ou-mapping"
+	templates.ExecuteTemplate(w, "admin_page_ou_mapping.html", data)
 }
 
 // handleAdminSaveOUMapping salva il mapping OU->Area scelto dall'admin e
@@ -877,8 +933,24 @@ func renderAdminAreas(w http.ResponseWriter, r *http.Request) {
 	templates.ExecuteTemplate(w, "admin_areas.html", data)
 }
 
+// handleAdminAreas serve la pagina "Aree" completa (navigazione diretta)
+// — le scritture (crea/rinomina/elimina) continuano a ricevere solo il
+// frammento via renderAdminAreas.
 func handleAdminAreas(w http.ResponseWriter, r *http.Request) {
-	renderAdminAreas(w, r)
+	areas, err := db.ListAreas()
+	if err != nil {
+		http.Error(w, "Failed to list areas", http.StatusInternalServerError)
+		return
+	}
+
+	locale := i18n.ResolveLocale(r)
+	data := railData()
+	data["Areas"] = areas
+	data["Username"] = sessionAdminUsername(r)
+	data["Section"] = "admin-areas"
+	data["Messages"] = i18n.GetMessages(locale)
+
+	templates.ExecuteTemplate(w, "admin_page_areas.html", data)
 }
 
 // slugify converte un nome area in una chiave stabile (minuscolo,
