@@ -1,5 +1,5 @@
 # Multi-stage build for Rubrica
-FROM golang:1.25-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 # Install build dependencies for CGO (required for SQLite)
 RUN apk add --no-cache gcc musl-dev sqlite-dev
