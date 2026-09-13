@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/go-ldap/ldap/v3"
-	"github.com/mirkochipdotcom/ldavsync/internal/config"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/config"
 )
 
 // Authenticate checks LDAP credentials and returns authentication status and admin status

@@ -1,0 +1,48 @@
+<div class="section-head">
+    <h3>Contatti locali</h3>
+</div>
+<p class="helptext" style="margin:8px 0 12px;">Contatti extra-dominio, non sincronizzati da LDAP — creati e gestiti solo qui. Non vengono mai toccati dal sync automatico.</p>
+
+{{if .Contacts}}
+{{$areas := .Areas}}
+{{range .Contacts}}
+{{$c := .}}
+<form hx-post="/admin/local-contacts/{{$c.UID}}" hx-target="#contacts-content" hx-swap="innerHTML"
+      class="field-row" style="padding:10px 0;border-bottom:1px solid var(--line);align-items:center;flex-wrap:wrap;">
+    <input type="text" name="display_name" value="{{$c.DisplayName}}" class="input" required style="min-width:140px;">
+    <input type="email" name="email" placeholder="Email" value="{{$c.Email}}" class="input" style="min-width:160px;">
+    <input type="text" name="primary_number" placeholder="Telefono" value="{{$c.PrimaryNumber}}" class="input" style="min-width:110px;">
+    <input type="text" name="department" placeholder="Reparto/Ente" value="{{$c.Department}}" class="input" style="min-width:110px;">
+    <input type="text" name="description" placeholder="Ruolo" value="{{$c.Description}}" class="input" style="min-width:110px;">
+    <select name="area" class="input" style="min-width:100px;">
+        <option value="" {{if not $c.Area}}selected{{end}}>Nessuna</option>
+        {{range $areas}}
+        <option value="{{.Key}}" {{if eq $c.Area .Key}}selected{{end}}>{{.Name}}</option>
+        {{end}}
+    </select>
+    <button type="submit" class="btn btn-ghost" style="flex:none;">{{index $.Messages "save"}}</button>
+    <button type="button" hx-post="/admin/local-contacts/{{$c.UID}}/delete" hx-confirm="Eliminare {{$c.DisplayName}}?"
+            hx-target="#contacts-content" hx-swap="innerHTML" class="btn-danger">{{index $.Messages "delete"}}</button>
+</form>
+{{end}}
+{{else}}
+<p class="helptext">Nessun contatto locale ancora.</p>
+{{end}}
+
+<div class="add-group-form open" style="margin-top:16px;">
+    <div class="helptext" style="margin-bottom:6px;">Nuovo contatto locale</div>
+    <form hx-post="/admin/local-contacts" hx-target="#contacts-content" hx-swap="innerHTML" class="field-row" style="margin:0;">
+        <input type="text" name="display_name" placeholder="Nome e cognome" class="input" required style="min-width:140px;">
+        <input type="email" name="email" placeholder="Email" class="input" style="min-width:160px;">
+        <input type="text" name="primary_number" placeholder="Telefono" class="input" style="min-width:110px;">
+        <input type="text" name="department" placeholder="Reparto/Ente" class="input" style="min-width:110px;">
+        <input type="text" name="description" placeholder="Ruolo" class="input" style="min-width:110px;">
+        <select name="area" class="input" style="min-width:100px;">
+            <option value="">Nessuna</option>
+            {{range .Areas}}
+            <option value="{{.Key}}">{{.Name}}</option>
+            {{end}}
+        </select>
+        <button type="submit" class="btn btn-primary" style="flex:none;">Aggiungi</button>
+    </form>
+</div>

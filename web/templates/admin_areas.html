@@ -1,0 +1,31 @@
+<div class="section-head">
+    <h3>Aree</h3>
+</div>
+<p class="helptext" style="margin:8px 0 12px;">Le aree filtrano la rubrica (sidebar) e vengono assegnate alle OU nel mapping sotto. Eliminare un'area la rimuove dai contatti che la usano (tornano "nessuna area"), non elimina i contatti.</p>
+
+<table>
+    <thead><tr><th>Nome</th><th>Chiave</th><th></th></tr></thead>
+    <tbody>
+        {{range .Areas}}
+        <tr>
+            <td>
+                <form hx-post="/admin/areas/{{.ID}}" hx-target="#areas-content" hx-swap="innerHTML" class="field-row" style="margin:0;">
+                    <input type="text" name="name" value="{{.Name}}" class="input">
+                    <button type="submit" class="btn btn-ghost" style="flex:none;">{{index $.Messages "save"}}</button>
+                </form>
+            </td>
+            <td class="num">{{.Key}}</td>
+            <td>
+                <button hx-post="/admin/areas/{{.ID}}/delete" hx-confirm="Eliminare l'area {{.Name}}?" hx-target="#areas-content" hx-swap="innerHTML" class="btn-danger">
+                    {{index $.Messages "delete"}}
+                </button>
+            </td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+
+<form hx-post="/admin/areas" hx-target="#areas-content" hx-swap="innerHTML" class="field-row" style="margin-top:14px;">
+    <input type="text" name="name" placeholder="Nuova area (es. Fornitori esterni)" class="input" required>
+    <button type="submit" class="btn btn-primary" style="flex:none;">Aggiungi area</button>
+</form>

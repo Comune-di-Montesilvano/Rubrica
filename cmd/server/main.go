@@ -6,18 +6,20 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
-	"github.com/mirkochipdotcom/ldavsync/internal/carddav"
-	"github.com/mirkochipdotcom/ldavsync/internal/config"
-	"github.com/mirkochipdotcom/ldavsync/internal/database"
-	"github.com/mirkochipdotcom/ldavsync/internal/i18n"
-	"github.com/mirkochipdotcom/ldavsync/internal/ldap"
-	"github.com/mirkochipdotcom/ldavsync/internal/phonebook"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/carddav"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/config"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/i18n"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/ldap"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/phonebook"
 )
 
 var (
@@ -31,7 +33,7 @@ var (
 )
 
 func main() {
-	log.Printf("[MAIN] Starting LdavSync %s", AppVersion)
+	log.Printf("[MAIN] Starting Rubrica %s", AppVersion)
 
 	// Load configuration
 	cfg = config.Load()
@@ -44,6 +46,17 @@ func main() {
 		log.Fatalf("[DATABASE] Failed to initialize: %v", err)
 	}
 	defer db.Close()
+
+	// Migrazione una tantum: se il prefisso non è mai stato salvato da
+	// admin (DB vuoto), importa il valore da .env come seed iniziale. Da
+	// qui in poi la fonte di verità è il pannello admin, non più .env.
+	if stored, _ := db.GetConfig(ldap.PrimaryNumberPrefixConfigKey); stored == "" && cfg.PrimaryNumberPrefix != "" {
+		if err := db.SetConfig(ldap.PrimaryNumberPrefixConfigKey, cfg.PrimaryNumberPrefix); err != nil {
+			log.Printf("[CONFIG] Failed to import primary_number_prefix from .env: %v", err)
+		} else {
+			log.Printf("[CONFIG] Imported primary_number_prefix from .env into DB: %s", cfg.PrimaryNumberPrefix)
+		}
+	}
 
 	// Initialize phonebook service
 	pbService = phonebook.NewService(db)
@@ -69,6 +82,36 @@ func main() {
 				end = len(s)
 			}
 			return strings.ToUpper(s[start:end])
+		},
+		"initials": func(name string) string {
+			parts := strings.Fields(name)
+			if len(parts) == 0 {
+				return ""
+			}
+			result := strings.ToUpper(string(parts[0][0]))
+			if len(parts) > 1 {
+				result += strings.ToUpper(string(parts[len(parts)-1][0]))
+			}
+			return result
+		},
+		// sentenceCase riscrive un'etichetta tutta maiuscola (come i reparti
+		// letti da AD, es. "POLIZIA LOCALE") in sentence case per la UI,
+		// senza toccare il dato in DB. Le etichette non interamente
+		// maiuscole (es. "Amministrazione politica", generata dal codice,
+		// non da AD) passano invariate: non sono il caso che deve normalizzare.
+		"sentenceCase": func(s string) string {
+			if s == "" || s != strings.ToUpper(s) {
+				return s
+			}
+			words := strings.Fields(strings.ToLower(s))
+			for i, w := range words {
+				r := []rune(w)
+				if len(r) > 0 {
+					r[0] = unicode.ToUpper(r[0])
+				}
+				words[i] = string(r)
+			}
+			return strings.Join(words, " ")
 		},
 	}
 	templates = template.Must(template.New("").Funcs(funcMap).ParseGlob("web/templates/*.html"))
@@ -99,6 +142,7 @@ func main() {
 	r.HandleFunc("/contacts/{uid}", handleContactDetail).Methods("GET")
 	r.HandleFunc("/contacts/{uid}/export", handleExportVCard).Methods("GET")
 	r.HandleFunc("/health", handleHealth).Methods("GET")
+	r.HandleFunc("/version", handleVersion).Methods("GET")
 
 	// Auth routes
 	r.HandleFunc("/login", handleLogin).Methods("GET", "POST")
@@ -118,6 +162,19 @@ func main() {
 	admin.HandleFunc("/groups/{id}/members", handleAdminGroupMembers).Methods("GET")
 	admin.HandleFunc("/groups/{id}/members", handleAdminAddMember).Methods("POST")
 	admin.HandleFunc("/groups/{id}/members/{contact_id}/delete", handleAdminRemoveMember).Methods("POST")
+	admin.HandleFunc("/groups/{id}/contacts/search", handleAdminContactSearch).Methods("GET")
+	admin.HandleFunc("/ou-mapping", handleAdminOUMapping).Methods("GET")
+	admin.HandleFunc("/ou-mapping", handleAdminSaveOUMapping).Methods("POST")
+	admin.HandleFunc("/ou-mapping/add", handleAdminAddOU).Methods("POST")
+	admin.HandleFunc("/ou-mapping/{ou}/delete", handleAdminDeleteOU).Methods("POST")
+	admin.HandleFunc("/areas", handleAdminAreas).Methods("GET")
+	admin.HandleFunc("/areas", handleAdminCreateArea).Methods("POST")
+	admin.HandleFunc("/areas/{id}", handleAdminRenameArea).Methods("POST")
+	admin.HandleFunc("/areas/{id}/delete", handleAdminDeleteArea).Methods("POST")
+	admin.HandleFunc("/local-contacts", handleAdminContacts).Methods("GET")
+	admin.HandleFunc("/local-contacts", handleAdminCreateContact).Methods("POST")
+	admin.HandleFunc("/local-contacts/{uid}", handleAdminUpdateContact).Methods("POST")
+	admin.HandleFunc("/local-contacts/{uid}/delete", handleAdminDeleteContact).Methods("POST")
 	admin.HandleFunc("/contacts/{uid}/override", handleAdminContactOverride).Methods("POST")
 
 	// CardDAV server
@@ -154,7 +211,7 @@ func ldapSyncWorker() {
 
 func requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		session, _ := store.Get(r, "ldavsync-session")
+		session, _ := store.Get(r, "rubrica-session")
 		if auth, ok := session.Values["authenticated"].(bool); !ok || !auth {
 			http.Redirect(w, r, "/login", http.StatusFound)
 			return
@@ -165,7 +222,7 @@ func requireAuth(next http.Handler) http.Handler {
 
 func requireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		session, _ := store.Get(r, "ldavsync-session")
+		session, _ := store.Get(r, "rubrica-session")
 		if admin, ok := session.Values["admin"].(bool); !ok || !admin {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
@@ -174,20 +231,74 @@ func requireAdmin(next http.Handler) http.Handler {
 	})
 }
 
+// sessionAdminUsername returns the logged-in admin's username, or "" if
+// the current request has no valid admin session. Used to render the
+// shared rail (rail.html) the same way on public and admin pages: a
+// logged-in admin sees the "Gestione" section and "Esci" everywhere, a
+// visitor sees only "Pannello Admin".
+func sessionAdminUsername(r *http.Request) string {
+	session, _ := store.Get(r, "rubrica-session")
+	auth, _ := session.Values["authenticated"].(bool)
+	admin, _ := session.Values["admin"].(bool)
+	if !auth || !admin {
+		return ""
+	}
+	username, _ := session.Values["username"].(string)
+	return username
+}
+
 // Public handlers
+
+// railData raccoglie i dati richiesti da rail.html su ogni pagina che la
+// include (pubblica o admin): conteggi/elenco Aree e stato di login.
+func railData() map[string]interface{} {
+	counts, err := db.CountByArea()
+	if err != nil {
+		log.Printf("[RAIL] Failed to count by area: %v", err)
+		counts = map[string]int{}
+	}
+	total := 0
+	for _, n := range counts {
+		total += n
+	}
+
+	areas, err := db.ListAreas()
+	if err != nil {
+		log.Printf("[RAIL] Failed to list areas: %v", err)
+	}
+
+	return map[string]interface{}{
+		"AreaCounts": counts,
+		"Total":      total,
+		"Areas":      areas,
+		"AppVersion": AppVersion,
+	}
+}
 
 func handleIndex(w http.ResponseWriter, r *http.Request) {
 	locale := i18n.ResolveLocale(r)
-	data := map[string]interface{}{
-		"Messages": i18n.GetMessages(locale),
-		"Locale":   locale,
+	activeArea := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("group")))
+
+	prefix, _ := db.GetConfig(ldap.PrimaryNumberPrefixConfigKey)
+	if prefix == "" {
+		prefix = cfg.PrimaryNumberPrefix
 	}
+	prefixDigits := strings.ReplaceAll(prefix, "{ext}", "")
+
+	data := railData()
+	data["Messages"] = i18n.GetMessages(locale)
+	data["Locale"] = locale
+	data["ActiveArea"] = activeArea
+	data["InitialGroup"] = activeArea
+	data["Username"] = sessionAdminUsername(r)
+	data["Section"] = "contacts"
+	data["PrefixHelperText"] = i18n.T(locale, "prefix_helper", prefixDigits)
 	templates.ExecuteTemplate(w, "phonebook.html", data)
 }
 
 func handleSearch(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	groupFilter := strings.TrimSpace(r.URL.Query().Get("group"))
+	groupFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("group")))
 
 	var (
 		results []*phonebook.ContactWithGroups
@@ -195,7 +306,7 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 	)
 
 	if query == "" {
-		results, err = pbService.ListContactsWithGroups(200, 0)
+		results, err = pbService.ListContactsWithGroups(500, 0)
 	} else {
 		results, err = pbService.SearchContactsWithGroups(query, 50)
 	}
@@ -206,43 +317,29 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply group filter if specified
 	if groupFilter != "" {
-		filtered := make([]*phonebook.ContactWithGroups, 0)
-		groupFilterLower := strings.ToLower(groupFilter)
-		patterns := cfg.LDAPOUFilters[groupFilterLower]
-		if len(patterns) == 0 {
-			patterns = []string{"ou=" + groupFilterLower, "/" + groupFilterLower}
-		}
-		log.Printf("[SEARCH] Applying filter '%s' to %d contacts", groupFilter, len(results))
-
-		// Debug: log first 3 contacts' DN
-		for i, result := range results {
-			if i < 3 {
-				log.Printf("[SEARCH] Sample contact %d: %s - DN: %s", i+1, result.Contact.DisplayName, result.Contact.LDAPDN)
-			}
-		}
-
+		filtered := make([]*phonebook.ContactWithGroups, 0, len(results))
 		for _, result := range results {
-			dnLower := strings.ToLower(result.Contact.LDAPDN)
-			match := false
-			for _, pattern := range patterns {
-				if strings.Contains(dnLower, pattern) {
-					match = true
-					break
-				}
-			}
-			if match {
+			if result.Contact.Area == groupFilter {
 				filtered = append(filtered, result)
 			}
 		}
-		log.Printf("[SEARCH] Filter '%s' result: %d contacts", groupFilter, len(filtered))
+		results = filtered
+	}
+
+	if r.URL.Query().Get("only_number") == "on" {
+		filtered := make([]*phonebook.ContactWithGroups, 0, len(results))
+		for _, result := range results {
+			if result.Contact.PrimaryNumber != "" || result.Contact.LDAPExt != "" {
+				filtered = append(filtered, result)
+			}
+		}
 		results = filtered
 	}
 
 	locale := i18n.ResolveLocale(r)
 	data := map[string]interface{}{
-		"Results":  results,
+		"Groups":   phonebook.GroupByDepartment(results),
 		"Messages": i18n.GetMessages(locale),
 	}
 
@@ -333,10 +430,24 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(status)
 }
 
+// handleVersion serve la versione corrente in esecuzione — usato dal poll
+// lato client (rail.html) per accorgersi che il container è stato
+// aggiornato e proporre un reload, senza dover controllare manualmente.
+func handleVersion(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"version": AppVersion})
+}
+
 // Auth handlers
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
+		if sessionAdminUsername(r) != "" {
+			// Già loggato: mostrare di nuovo il form di login sembra un
+			// logout inaspettato. Manda direttamente in admin.
+			http.Redirect(w, r, "/admin", http.StatusFound)
+			return
+		}
 		locale := i18n.ResolveLocale(r)
 		data := map[string]interface{}{
 			"Messages": i18n.GetMessages(locale),
@@ -366,7 +477,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, _ := store.Get(r, "ldavsync-session")
+	session, _ := store.Get(r, "rubrica-session")
 	session.Values["authenticated"] = true
 	session.Values["admin"] = isAdmin
 	session.Values["username"] = username
@@ -376,7 +487,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
-	session, _ := store.Get(r, "ldavsync-session")
+	session, _ := store.Get(r, "rubrica-session")
 	session.Values["authenticated"] = false
 	session.Values["admin"] = false
 	session.Save(r, w)
@@ -387,13 +498,18 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	locale := i18n.ResolveLocale(r)
-	session, _ := store.Get(r, "ldavsync-session")
 
-	data := map[string]interface{}{
-		"Messages": i18n.GetMessages(locale),
-		"Username": session.Values["username"],
-		"LastSync": lastSync.Format("2006-01-02 15:04:05"),
+	prefix, _ := db.GetConfig(ldap.PrimaryNumberPrefixConfigKey)
+	if prefix == "" {
+		prefix = cfg.PrimaryNumberPrefix
 	}
+
+	data := railData()
+	data["Messages"] = i18n.GetMessages(locale)
+	data["Username"] = sessionAdminUsername(r)
+	data["Section"] = "admin"
+	data["LastSync"] = lastSync.Format("2006-01-02 15:04:05")
+	data["PrimaryNumberPrefix"] = prefix
 
 	templates.ExecuteTemplate(w, "admin.html", data)
 }
@@ -413,7 +529,7 @@ func handleAdminSync(w http.ResponseWriter, r *http.Request) {
 
 func handleAdminConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
-		prefix, _ := db.GetConfig("primary_number_prefix")
+		prefix, _ := db.GetConfig(ldap.PrimaryNumberPrefixConfigKey)
 		if prefix == "" {
 			prefix = cfg.PrimaryNumberPrefix
 		}
@@ -427,15 +543,38 @@ func handleAdminConfig(w http.ResponseWriter, r *http.Request) {
 
 	// POST
 	prefix := r.FormValue("primary_number_prefix")
-	if err := db.SetConfig("primary_number_prefix", prefix); err != nil {
+	if err := db.SetConfig(ldap.PrimaryNumberPrefixConfigKey, prefix); err != nil {
 		http.Error(w, "Failed to save config", http.StatusInternalServerError)
 		return
 	}
 
-	w.Write([]byte("Config saved"))
+	w.Write([]byte("Salvato — verrà applicato al prossimo sync"))
 }
 
+// handleAdminListGroups serve la pagina "Etichette numero" completa
+// (navigazione diretta) — le scritture (crea/elimina) continuano a
+// ricevere solo il frammento via renderAdminGroups.
 func handleAdminListGroups(w http.ResponseWriter, r *http.Request) {
+	groups, err := pbService.ListGroupsWithMembers()
+	if err != nil {
+		http.Error(w, "Failed to list groups", http.StatusInternalServerError)
+		return
+	}
+
+	locale := i18n.ResolveLocale(r)
+	data := railData()
+	data["Groups"] = groups
+	data["Username"] = sessionAdminUsername(r)
+	data["Section"] = "admin-groups"
+	data["Messages"] = i18n.GetMessages(locale)
+
+	templates.ExecuteTemplate(w, "admin_page_groups.html", data)
+}
+
+// renderAdminGroups re-renders the etichette numero table (admin_groups.html).
+// Used both for the initial hx-get "load" and after create/delete, so the
+// UI reflects the change instead of showing the handler's plain-text result.
+func renderAdminGroups(w http.ResponseWriter, r *http.Request) {
 	groups, err := pbService.ListGroupsWithMembers()
 	if err != nil {
 		http.Error(w, "Failed to list groups", http.StatusInternalServerError)
@@ -463,7 +602,7 @@ func handleAdminCreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Write([]byte("Group created"))
+	renderAdminGroups(w, r)
 }
 
 func handleAdminUpdateGroup(w http.ResponseWriter, r *http.Request) {
@@ -494,7 +633,7 @@ func handleAdminDeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Write([]byte("Group deleted"))
+	renderAdminGroups(w, r)
 }
 
 func handleAdminGroupMembers(w http.ResponseWriter, r *http.Request) {
@@ -507,10 +646,20 @@ func handleAdminGroupMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Candidati di default: contatti con un numero già mostrati subito nel
+	// picker, prima ancora di digitare una ricerca (click = aggiungi).
+	candidates, err := db.ListContactsWithNumber(20)
+	if err != nil {
+		log.Printf("[ADMIN] Failed to list candidate contacts: %v", err)
+		candidates = nil
+	}
+
 	locale := i18n.ResolveLocale(r)
 	data := map[string]interface{}{
 		"Group":    groupWithMembers.Group,
+		"GroupID":  groupWithMembers.Group.ID,
 		"Members":  groupWithMembers.Members,
+		"Contacts": candidates,
 		"Messages": i18n.GetMessages(locale),
 	}
 
@@ -527,7 +676,7 @@ func handleAdminAddMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Write([]byte("Member added"))
+	renderMembersList(w, r, groupID)
 }
 
 func handleAdminRemoveMember(w http.ResponseWriter, r *http.Request) {
@@ -540,7 +689,465 @@ func handleAdminRemoveMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Write([]byte("Member removed"))
+	renderMembersList(w, r, groupID)
+}
+
+// renderMembersList re-renders just the #members-list fragment for a
+// group, used after add/remove so the modal reflects the change instead
+// of showing the handler's plain-text result.
+func renderMembersList(w http.ResponseWriter, r *http.Request, groupID int64) {
+	members, err := db.GetGroupMembers(groupID)
+	if err != nil {
+		http.Error(w, "Failed to list members", http.StatusInternalServerError)
+		return
+	}
+
+	locale := i18n.ResolveLocale(r)
+	data := map[string]interface{}{
+		"GroupID":  groupID,
+		"Members":  members,
+		"Messages": i18n.GetMessages(locale),
+	}
+	templates.ExecuteTemplate(w, "admin_members_list.html", data)
+}
+
+// handleAdminContactSearch returns a clickable dropdown of contacts
+// matching the query, for the "cerca e aggiungi" member picker. Each
+// result posts itself as a new group member via HTMX — no separate
+// submit step, no raw contact ID typed by hand.
+func handleAdminContactSearch(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	groupID := vars["id"]
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+
+	if query == "" {
+		return
+	}
+
+	contacts, err := db.SearchContacts(query, 8)
+	if err != nil {
+		http.Error(w, "Search failed", http.StatusInternalServerError)
+		return
+	}
+
+	data := map[string]interface{}{
+		"Contacts": contacts,
+		"GroupID":  groupID,
+	}
+	templates.ExecuteTemplate(w, "admin_contact_search.html", data)
+}
+
+// loadOUMapping legge il mapping salvato, o il default se non ancora
+// configurato / JSON non valido.
+func loadOUMapping() map[string]string {
+	raw, _ := db.GetConfig(ldap.OUAreaMappingConfigKey)
+	if raw == "" {
+		return ldap.DefaultOUAreaMapping
+	}
+	var stored map[string]string
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil || len(stored) == 0 {
+		return ldap.DefaultOUAreaMapping
+	}
+	return stored
+}
+
+// buildOUMappingData raccoglie i dati per la sezione mapping OU->Area:
+// l'unione delle OU viste nei dati LDAP e di quelle già mappate a mano
+// (una OU aggiunta manualmente per un contatto non ancora sincronizzato
+// non deve sparire dalla lista solo perché nessun contatto la usa ancora).
+func buildOUMappingData(r *http.Request) (map[string]interface{}, error) {
+	dns, err := db.ListDistinctLDAPDNs()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list OUs: %w", err)
+	}
+
+	mapping := loadOUMapping()
+
+	ouSet := make(map[string]bool)
+	for _, dn := range dns {
+		if ou := ldap.ClassificationOU(dn); ou != "" {
+			ouSet[ou] = true
+		}
+	}
+	for ou := range mapping {
+		ouSet[ou] = true
+	}
+	ous := make([]string, 0, len(ouSet))
+	for ou := range ouSet {
+		ous = append(ous, ou)
+	}
+	sort.Strings(ous)
+
+	areas, err := db.ListAreas()
+	if err != nil {
+		log.Printf("[ADMIN] Failed to list areas: %v", err)
+	}
+
+	locale := i18n.ResolveLocale(r)
+	return map[string]interface{}{
+		"OUs":      ous,
+		"Mapping":  mapping,
+		"Areas":    areas,
+		"Messages": i18n.GetMessages(locale),
+	}, nil
+}
+
+// renderOUMapping re-renders solo il frammento (usato dopo save/add via
+// HTMX, che sostituisce #ou-mapping-content in place).
+func renderOUMapping(w http.ResponseWriter, r *http.Request) {
+	data, err := buildOUMappingData(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	templates.ExecuteTemplate(w, "admin_ou_mapping.html", data)
+}
+
+// handleAdminAddOU aggiunge una nuova OU (digitata a mano) al mapping,
+// senza richiedere che sia già stata vista in un sync — serve per
+// preparare in anticipo l'area di contatti extra-dominio non ancora
+// presenti.
+func handleAdminAddOU(w http.ResponseWriter, r *http.Request) {
+	ou := strings.ToUpper(strings.TrimSpace(r.FormValue("new_ou")))
+	area := strings.TrimSpace(r.FormValue("new_area"))
+	if ou == "" {
+		renderOUMapping(w, r)
+		return
+	}
+
+	mapping := loadOUMapping()
+	// copia: loadOUMapping può ritornare la mappa di default condivisa,
+	// non va mutata in place.
+	updated := make(map[string]string, len(mapping)+1)
+	for k, v := range mapping {
+		updated[k] = v
+	}
+	if area != "" {
+		updated[ou] = area
+	} else if _, exists := updated[ou]; !exists {
+		updated[ou] = ""
+	}
+
+	raw, err := json.Marshal(updated)
+	if err != nil {
+		http.Error(w, "Failed to encode mapping", http.StatusInternalServerError)
+		return
+	}
+	if err := db.SetConfig(ldap.OUAreaMappingConfigKey, string(raw)); err != nil {
+		http.Error(w, "Failed to save mapping", http.StatusInternalServerError)
+		return
+	}
+
+	renderOUMapping(w, r)
+}
+
+// handleAdminDeleteOU rimuove una singola associazione OU->Area,
+// indipendentemente dalle altre righe della tabella — azione esplicita,
+// non affidata al side-effect implicito di "seleziona Nessuna e salva
+// tutto" che risultava poco affidabile/scopribile.
+func handleAdminDeleteOU(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	ou := vars["ou"]
+
+	mapping := loadOUMapping()
+	updated := make(map[string]string, len(mapping))
+	for k, v := range mapping {
+		if k == ou {
+			continue
+		}
+		updated[k] = v
+	}
+
+	raw, err := json.Marshal(updated)
+	if err != nil {
+		http.Error(w, "Failed to encode mapping", http.StatusInternalServerError)
+		return
+	}
+	if err := db.SetConfig(ldap.OUAreaMappingConfigKey, string(raw)); err != nil {
+		http.Error(w, "Failed to save mapping", http.StatusInternalServerError)
+		return
+	}
+
+	renderOUMapping(w, r)
+}
+
+// handleAdminOUMapping serve la pagina "Mapping OU" completa (navigazione
+// diretta) — le scritture (save/add) continuano a ricevere solo il
+// frammento via renderOUMapping.
+func handleAdminOUMapping(w http.ResponseWriter, r *http.Request) {
+	content, err := buildOUMappingData(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	data := railData()
+	for k, v := range content {
+		data[k] = v
+	}
+	data["Username"] = sessionAdminUsername(r)
+	data["Section"] = "admin-ou-mapping"
+	templates.ExecuteTemplate(w, "admin_page_ou_mapping.html", data)
+}
+
+// handleAdminSaveOUMapping salva il mapping OU->Area scelto dall'admin e
+// avvia subito un resync in background, così l'effetto si vede senza
+// dover aspettare il prossimo ciclo orario.
+func handleAdminSaveOUMapping(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form", http.StatusBadRequest)
+		return
+	}
+
+	mapping := make(map[string]string)
+	for key, vals := range r.Form {
+		if !strings.HasPrefix(key, "area_") || len(vals) == 0 {
+			continue
+		}
+		ou := strings.TrimPrefix(key, "area_")
+		if area := strings.TrimSpace(vals[0]); area != "" {
+			mapping[ou] = area
+		}
+	}
+
+	raw, err := json.Marshal(mapping)
+	if err != nil {
+		http.Error(w, "Failed to encode mapping", http.StatusInternalServerError)
+		return
+	}
+	if err := db.SetConfig(ldap.OUAreaMappingConfigKey, string(raw)); err != nil {
+		http.Error(w, "Failed to save mapping", http.StatusInternalServerError)
+		return
+	}
+
+	go func() {
+		if err := ldap.SyncContacts(db, cfg); err != nil {
+			log.Printf("[SYNC] Resync after OU mapping change failed: %v", err)
+		} else {
+			lastSync = time.Now()
+		}
+	}()
+
+	renderOUMapping(w, r)
+}
+
+// renderAdminAreas re-renders the CRUD aree section (list + form nuova
+// area + rinomina/elimina).
+func renderAdminAreas(w http.ResponseWriter, r *http.Request) {
+	areas, err := db.ListAreas()
+	if err != nil {
+		http.Error(w, "Failed to list areas", http.StatusInternalServerError)
+		return
+	}
+
+	locale := i18n.ResolveLocale(r)
+	data := map[string]interface{}{
+		"Areas":    areas,
+		"Messages": i18n.GetMessages(locale),
+	}
+	templates.ExecuteTemplate(w, "admin_areas.html", data)
+}
+
+// handleAdminAreas serve la pagina "Aree" completa (navigazione diretta)
+// — le scritture (crea/rinomina/elimina) continuano a ricevere solo il
+// frammento via renderAdminAreas.
+func handleAdminAreas(w http.ResponseWriter, r *http.Request) {
+	areas, err := db.ListAreas()
+	if err != nil {
+		http.Error(w, "Failed to list areas", http.StatusInternalServerError)
+		return
+	}
+
+	locale := i18n.ResolveLocale(r)
+	data := railData()
+	data["Areas"] = areas
+	data["Username"] = sessionAdminUsername(r)
+	data["Section"] = "admin-areas"
+	data["Messages"] = i18n.GetMessages(locale)
+
+	templates.ExecuteTemplate(w, "admin_page_areas.html", data)
+}
+
+// slugify converte un nome area in una chiave stabile (minuscolo,
+// solo lettere/numeri/underscore) usata come valore di contacts.area.
+func slugify(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == ' ' || r == '-' || r == '_':
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
+}
+
+func handleAdminCreateArea(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		renderAdminAreas(w, r)
+		return
+	}
+	key := slugify(name)
+	if key == "" {
+		renderAdminAreas(w, r)
+		return
+	}
+
+	if err := db.CreateArea(&database.Area{Key: key, Name: name}); err != nil {
+		log.Printf("[ADMIN] Failed to create area %q: %v", name, err)
+	}
+	renderAdminAreas(w, r)
+}
+
+func handleAdminRenameArea(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id, _ := strconv.ParseInt(vars["id"], 10, 64)
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		renderAdminAreas(w, r)
+		return
+	}
+
+	if err := db.RenameArea(id, name); err != nil {
+		log.Printf("[ADMIN] Failed to rename area %d: %v", id, err)
+	}
+	renderAdminAreas(w, r)
+}
+
+func handleAdminDeleteArea(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id, _ := strconv.ParseInt(vars["id"], 10, 64)
+
+	if err := db.DeleteArea(id); err != nil {
+		log.Printf("[ADMIN] Failed to delete area %d: %v", id, err)
+	}
+	renderAdminAreas(w, r)
+}
+
+// Contatti locali (manuali, extra-dominio) — CRUD separato dai contatti
+// LDAP: sono l'unico posto dove si può creare/modificare/eliminare un
+// contatto direttamente, invece di override su un dato sincronizzato.
+
+// generateManualUID produce uno UID univoco per un contatto manuale, col
+// prefisso "manual-" per non poter mai collidere con uno UID reale
+// proveniente da LDAP (che non usa mai questo prefisso).
+func generateManualUID(name string) string {
+	base := "manual-" + slugify(name)
+	if base == "manual-" {
+		base = "manual-contatto"
+	}
+	uid := base
+	for i := 2; ; i++ {
+		existing, err := db.GetContact(uid)
+		if err != nil || existing == nil {
+			return uid
+		}
+		uid = fmt.Sprintf("%s-%d", base, i)
+	}
+}
+
+// renderAdminContacts re-renders solo il frammento (usato dopo
+// crea/modifica/elimina via HTMX).
+func renderAdminContacts(w http.ResponseWriter, r *http.Request) {
+	contacts, err := db.ListManualContacts()
+	if err != nil {
+		http.Error(w, "Failed to list contacts", http.StatusInternalServerError)
+		return
+	}
+	areas, err := db.ListAreas()
+	if err != nil {
+		log.Printf("[ADMIN] Failed to list areas: %v", err)
+	}
+
+	locale := i18n.ResolveLocale(r)
+	data := map[string]interface{}{
+		"Contacts": contacts,
+		"Areas":    areas,
+		"Messages": i18n.GetMessages(locale),
+	}
+	templates.ExecuteTemplate(w, "admin_contacts.html", data)
+}
+
+// handleAdminContacts serve la pagina "Contatti locali" completa
+// (navigazione diretta) — le scritture continuano a ricevere solo il
+// frammento via renderAdminContacts.
+func handleAdminContacts(w http.ResponseWriter, r *http.Request) {
+	contacts, err := db.ListManualContacts()
+	if err != nil {
+		http.Error(w, "Failed to list contacts", http.StatusInternalServerError)
+		return
+	}
+	areas, err := db.ListAreas()
+	if err != nil {
+		log.Printf("[ADMIN] Failed to list areas: %v", err)
+	}
+
+	locale := i18n.ResolveLocale(r)
+	data := railData()
+	data["Contacts"] = contacts
+	data["Areas"] = areas
+	data["Username"] = sessionAdminUsername(r)
+	data["Section"] = "admin-contacts"
+	data["Messages"] = i18n.GetMessages(locale)
+
+	templates.ExecuteTemplate(w, "admin_page_contacts.html", data)
+}
+
+func handleAdminCreateContact(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.FormValue("display_name"))
+	if name == "" {
+		renderAdminContacts(w, r)
+		return
+	}
+
+	c := &database.Contact{
+		UID:           generateManualUID(name),
+		DisplayName:   name,
+		Email:         strings.TrimSpace(r.FormValue("email")),
+		PrimaryNumber: strings.TrimSpace(r.FormValue("primary_number")),
+		Department:    strings.TrimSpace(r.FormValue("department")),
+		Description:   strings.TrimSpace(r.FormValue("description")),
+		Area:          strings.TrimSpace(r.FormValue("area")),
+	}
+	if err := db.CreateManualContact(c); err != nil {
+		log.Printf("[ADMIN] Failed to create manual contact %q: %v", name, err)
+	}
+	renderAdminContacts(w, r)
+}
+
+func handleAdminUpdateContact(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	uid := vars["uid"]
+	name := strings.TrimSpace(r.FormValue("display_name"))
+	if name == "" {
+		renderAdminContacts(w, r)
+		return
+	}
+
+	c := &database.Contact{
+		UID:           uid,
+		DisplayName:   name,
+		Email:         strings.TrimSpace(r.FormValue("email")),
+		PrimaryNumber: strings.TrimSpace(r.FormValue("primary_number")),
+		Department:    strings.TrimSpace(r.FormValue("department")),
+		Description:   strings.TrimSpace(r.FormValue("description")),
+		Area:          strings.TrimSpace(r.FormValue("area")),
+	}
+	if err := db.UpdateManualContact(c); err != nil {
+		log.Printf("[ADMIN] Failed to update manual contact %q: %v", uid, err)
+	}
+	renderAdminContacts(w, r)
+}
+
+func handleAdminDeleteContact(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	uid := vars["uid"]
+
+	if err := db.DeleteManualContact(uid); err != nil {
+		log.Printf("[ADMIN] Failed to delete manual contact %q: %v", uid, err)
+	}
+	renderAdminContacts(w, r)
 }
 
 func handleAdminContactOverride(w http.ResponseWriter, r *http.Request) {

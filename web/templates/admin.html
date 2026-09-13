@@ -3,68 +3,37 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{index .Messages "app_title"}}</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <title>{{index .Messages "admin_panel"}} - {{index .Messages "app_title"}}</title>
     <script src="https://unpkg.com/htmx.org@2.0.0"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
 </head>
-<body class="bg-gray-50">
-    <nav class="bg-white shadow-sm">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="flex justify-between h-16">
-                <div class="flex items-center">
-                    <h1 class="text-xl font-bold">{{index .Messages "app_title"}}</h1>
-                </div>
-                <div class="flex items-center space-x-4">
-                    <a href="/" class="text-blue-600 hover:text-blue-800">{{index .Messages "contacts"}}</a>
-                    <span class="text-gray-600">{{.Username}}</span>
-                    <form method="POST" action="/logout" class="inline">
-                        <button type="submit" class="text-red-600 hover:text-red-800">{{index .Messages "logout"}}</button>
-                    </form>
-                </div>
-            </div>
-        </div>
-    </nav>
+<body>
+    <div class="shell">
+        {{template "rail.html" .}}
 
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div class="bg-white rounded-lg shadow p-6 mb-6">
-            <h2 class="text-2xl font-bold mb-4">{{index .Messages "admin_panel"}}</h2>
-            
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                <div class="border rounded p-4">
-                    <h3 class="font-semibold mb-2">{{index .Messages "last_sync"}}</h3>
-                    <p class="text-gray-600">{{.LastSync}}</p>
-                    <button hx-post="/admin/sync" 
-                            hx-swap="none"
-                            class="mt-2 bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
+        <main class="main" style="max-width:920px;">
+            <h1 class="page-title">{{index .Messages "admin_panel"}}</h1>
+
+            <div class="grid2">
+                <div class="card">
+                    <h3>{{index .Messages "last_sync"}}</h3>
+                    <div class="sync-time">{{.LastSync}}</div>
+                    <button hx-post="/admin/sync" hx-swap="none" class="btn btn-primary" style="flex:none;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.5 9a9 9 0 0114.5-4.5L23 10M1 14l5 4.5A9 9 0 0020.5 15"/></svg>
                         {{index .Messages "sync_now"}}
                     </button>
                 </div>
-                
-                <div class="border rounded p-4">
-                    <h3 class="font-semibold mb-2">{{index .Messages "config"}}</h3>
-                    <form hx-post="/admin/config" hx-swap="none">
-                        <label class="block text-sm font-medium text-gray-700 mb-2">
-                            {{index .Messages "primary_number_prefix"}}
-                        </label>
-                        <input type="text" 
-                               name="primary_number_prefix" 
-                               placeholder="0854321{ext}"
-                               class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 mb-2">
-                        <button type="submit" 
-                                class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">
-                            {{index .Messages "save"}}
-                        </button>
+                <div class="card">
+                    <h3>{{index .Messages "primary_number_prefix"}}</h3>
+                    <form hx-post="/admin/config" hx-target="#config-status" hx-swap="innerHTML" class="field-row">
+                        <input type="text" name="primary_number_prefix" value="{{.PrimaryNumberPrefix}}" placeholder="0854321{ext}" class="input">
+                        <button type="submit" class="btn btn-ghost" style="flex:none;">{{index .Messages "save"}}</button>
                     </form>
+                    <span id="config-status" class="helptext"></span>
                 </div>
             </div>
-            
-            <div class="border-t pt-6">
-                <h3 class="text-xl font-semibold mb-4">{{index .Messages "group_numbers"}}</h3>
-                <div id="groups-content" hx-get="/admin/groups" hx-trigger="load" hx-swap="innerHTML">
-                    <p class="text-gray-500">Loading...</p>
-                </div>
-            </div>
-        </div>
+
+        </main>
     </div>
 </body>
 </html>

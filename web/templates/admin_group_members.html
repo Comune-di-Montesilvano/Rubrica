@@ -1,55 +1,14 @@
 <div>
-    <h4 class="font-semibold text-lg mb-4">{{.Group.Number}} - {{.Group.Name}}</h4>
-    
-    <div class="mb-6">
-        <h5 class="font-medium mb-2">{{index .Messages "add_member"}}</h5>
-        <form hx-post="/admin/groups/{{.Group.ID}}/members" 
-              hx-target="#members-list" 
-              hx-swap="outerHTML"
-              class="flex gap-2">
-            <input type="number" 
-                   name="contact_id" 
-                   placeholder="Contact ID" 
-                   required
-                   class="flex-1 shadow border rounded py-2 px-3 text-gray-700">
-            <button type="submit" 
-                    class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
-                {{index .Messages "add_member"}}
-            </button>
-        </form>
+    <h3 class="page-title" style="font-size:15px;margin-bottom:14px;">{{.Group.Number}} &mdash; {{.Group.Name}}</h3>
+
+    <div style="margin-bottom:18px;">
+        <div class="helptext" style="margin-bottom:6px;">{{index .Messages "add_member"}}</div>
+        <input type="text" class="input" style="width:100%;" placeholder="Cerca per nome..."
+               hx-get="/admin/groups/{{.Group.ID}}/contacts/search"
+               hx-trigger="keyup changed delay:300ms"
+               hx-target="#contact-search-results" hx-swap="innerHTML">
+        <div id="contact-search-results">{{template "admin_contact_search.html" .}}</div>
     </div>
-    
-    <div id="members-list">
-        {{if .Members}}
-        <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-50">
-                <tr>
-                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{index .Messages "name"}}</th>
-                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{index .Messages "email"}}</th>
-                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{index .Messages "phone"}}</th>
-                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{index .Messages "actions"}}</th>
-                </tr>
-            </thead>
-            <tbody class="bg-white divide-y divide-gray-200">
-                {{range .Members}}
-                <tr>
-                    <td class="px-4 py-2 text-sm text-gray-900">{{.DisplayName}}</td>
-                    <td class="px-4 py-2 text-sm text-gray-600">{{.Email}}</td>
-                    <td class="px-4 py-2 text-sm text-gray-600">{{.PrimaryNumber}}</td>
-                    <td class="px-4 py-2 text-sm">
-                        <button hx-post="/admin/groups/{{$.Group.ID}}/members/{{.ID}}/delete"
-                                hx-target="#members-list"
-                                hx-swap="outerHTML"
-                                class="text-red-600 hover:text-red-900">
-                            {{index $.Messages "delete"}}
-                        </button>
-                    </td>
-                </tr>
-                {{end}}
-            </tbody>
-        </table>
-        {{else}}
-        <p class="text-gray-500 text-center py-4">Nessun membro</p>
-        {{end}}
-    </div>
+
+    {{template "admin_members_list.html" .}}
 </div>

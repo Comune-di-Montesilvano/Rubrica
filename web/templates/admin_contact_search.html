@@ -1,0 +1,19 @@
+{{if .Contacts}}
+<div class="search-dropdown">
+    {{range .Contacts}}
+    <button type="button" class="search-dropdown-item"
+            hx-post="/admin/groups/{{$.GroupID}}/members"
+            hx-vals='{"contact_id": "{{.ID}}"}'
+            hx-target="#members-list" hx-swap="outerHTML"
+            onclick="this.closest('.search-dropdown').remove()">
+        <span class="who">
+            <span class="name">{{.DisplayName}}</span>
+            {{if .Department}}<span class="role">{{sentenceCase .Department}}</span>{{end}}
+        </span>
+        <span class="role">{{if .LDAPExt}}int. {{.LDAPExt}}{{else if .PrimaryNumber}}{{.PrimaryNumber}}{{end}}</span>
+    </button>
+    {{end}}
+</div>
+{{else}}
+<div class="search-dropdown"><div class="helptext" style="padding:8px 12px;">Nessun risultato</div></div>
+{{end}}
