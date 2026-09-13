@@ -38,6 +38,13 @@ var messages = map[string]map[string]string{
 		"primary_number_prefix": "Primary Number Prefix",
 		"export_vcard":          "Export vCard",
 		"no_results":            "No results found",
+		"area_all":              "All",
+		"area_interni":          "Internal",
+		"area_esterni":          "External",
+		"area_politica":         "Political",
+		"prefix_helper":         "From outside the office, dial %s before the extension shown below",
+		"extension":             "ext.",
+		"call_extension":        "Call extension",
 	},
 	"it": {
 		"app_title":             "LdavSync - Rubrica Aziendale",
@@ -70,6 +77,13 @@ var messages = map[string]map[string]string{
 		"primary_number_prefix": "Prefisso Numero Primario",
 		"export_vcard":          "Esporta vCard",
 		"no_results":            "Nessun risultato",
+		"area_all":              "Tutti",
+		"area_interni":          "Interni",
+		"area_esterni":          "Esterni",
+		"area_politica":         "Politica",
+		"prefix_helper":         "Da fuori l'ente, componi %s prima dell'interno mostrato sotto",
+		"extension":             "interno",
+		"call_extension":        "Chiama interno",
 	},
 }
 
