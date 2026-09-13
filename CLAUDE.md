@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-LdavSync (module `github.com/mirkochipdotcom/ldavsync`, historically "gorubrica"): a corporate directory app that syncs contacts hourly from LDAP/AD, stores them in embedded SQLite, serves a search UI (HTMX), and exposes a CardDAV server for Thunderbird/iOS/Android address book clients.
+**Rubrica** (module `github.com/mirkochipdotcom/ldavsync` — historically "gorubrica" → "LdavSync" → "Rubrica"; the module path/repo location hasn't followed the latest rename yet, see note below): a corporate directory app, purpose-built for a specific municipality's AD/PBX (not designed for reuse elsewhere), that syncs contacts hourly from LDAP/AD, stores them in embedded SQLite, serves a search UI (HTMX), and exposes a CardDAV server for Thunderbird/iOS/Android address book clients.
+
+**Naming note**: the display name is "Rubrica" (UI, CardDAV realm, log lines), but the Go module path, Docker image name (`ghcr.io/mirkochipdotcom/ldavsync`), and container/binary name are still `ldavsync` — those are tied to the current GitHub repo location and are meant to be updated together in the same pass as an eventual repo transfer/rename, not piecemeal.
 
 ## Commands
 

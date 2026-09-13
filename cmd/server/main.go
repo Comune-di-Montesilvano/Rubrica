@@ -33,7 +33,7 @@ var (
 )
 
 func main() {
-	log.Printf("[MAIN] Starting LdavSync %s", AppVersion)
+	log.Printf("[MAIN] Starting Rubrica %s", AppVersion)
 
 	// Load configuration
 	cfg = config.Load()
@@ -211,7 +211,7 @@ func ldapSyncWorker() {
 
 func requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		session, _ := store.Get(r, "ldavsync-session")
+		session, _ := store.Get(r, "rubrica-session")
 		if auth, ok := session.Values["authenticated"].(bool); !ok || !auth {
 			http.Redirect(w, r, "/login", http.StatusFound)
 			return
@@ -222,7 +222,7 @@ func requireAuth(next http.Handler) http.Handler {
 
 func requireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		session, _ := store.Get(r, "ldavsync-session")
+		session, _ := store.Get(r, "rubrica-session")
 		if admin, ok := session.Values["admin"].(bool); !ok || !admin {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
@@ -237,7 +237,7 @@ func requireAdmin(next http.Handler) http.Handler {
 // logged-in admin sees the "Gestione" section and "Esci" everywhere, a
 // visitor sees only "Pannello Admin".
 func sessionAdminUsername(r *http.Request) string {
-	session, _ := store.Get(r, "ldavsync-session")
+	session, _ := store.Get(r, "rubrica-session")
 	auth, _ := session.Values["authenticated"].(bool)
 	admin, _ := session.Values["admin"].(bool)
 	if !auth || !admin {
@@ -477,7 +477,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, _ := store.Get(r, "ldavsync-session")
+	session, _ := store.Get(r, "rubrica-session")
 	session.Values["authenticated"] = true
 	session.Values["admin"] = isAdmin
 	session.Values["username"] = username
@@ -487,7 +487,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
-	session, _ := store.Get(r, "ldavsync-session")
+	session, _ := store.Get(r, "rubrica-session")
 	session.Values["authenticated"] = false
 	session.Values["admin"] = false
 	session.Save(r, w)
