@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -19,17 +20,77 @@ import (
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/i18n"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/ldap"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/pbx"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/phonebook"
 )
 
 var (
-	AppVersion = "dev"
-	templates  *template.Template
-	store      *sessions.CookieStore
-	db         *database.DB
-	cfg        *config.Config
-	pbService  *phonebook.Service
-	lastSync   time.Time
+	AppVersion  = "dev"
+	templates   *template.Template
+	store       *sessions.CookieStore
+	db          *database.DB
+	cfg         *config.Config
+	pbService   *phonebook.Service
+	lastSync    time.Time
+	lastPBXSync time.Time
+	// lastPBXSyncResult raccoglie le diagnostiche (mismatch nome, interni
+	// riciclabili) calcolate dall'ultimo sync PBX riuscito — non esiste un
+	// modo economico per ricalcolarle senza interrogare di nuovo il
+	// centralino, quindi restano valide fino al prossimo sync.
+	lastPBXSyncResult pbx.SyncResult
+)
+
+// syncStatus è lo stato di un sync manuale in corso, mostrato dalla UI
+// admin che fa polling (hx-get ogni ~1.2s) finché Running non torna false.
+// Un solo sync manuale per volta ha senso mostrarne (LDAP e PBX sono
+// indipendenti, ognuno ha il proprio); i sync automatici (ticker/startup)
+// non aggiornano questo stato, sono fire-and-forget in background come
+// prima — qui serve solo il feedback per il click esplicito dell'admin.
+type syncStatus struct {
+	mu      sync.Mutex
+	Running bool
+	Phase   string // testo fase corrente, es. "Elaborazione contatti: 120/350"
+	Message string // messaggio finale (successo o errore)
+	IsError bool
+}
+
+func (s *syncStatus) start() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Running = true
+	s.Phase = "Avvio..."
+	s.Message = ""
+	s.IsError = false
+}
+
+func (s *syncStatus) setPhase(phase string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Phase = phase
+}
+
+func (s *syncStatus) finish(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Running = false
+	if err != nil {
+		s.IsError = true
+		s.Message = "Sync fallito: " + err.Error()
+	} else {
+		s.IsError = false
+		s.Message = "Sync completato con successo."
+	}
+}
+
+func (s *syncStatus) snapshot() syncStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return syncStatus{Running: s.Running, Phase: s.Phase, Message: s.Message, IsError: s.IsError}
+}
+
+var (
+	ldapManualSync = &syncStatus{}
+	pbxManualSync  = &syncStatus{}
 )
 
 func main() {
@@ -73,6 +134,12 @@ func main() {
 
 	// Load templates with custom functions
 	funcMap := template.FuncMap{
+		// extList: un contatto può avere più interni in AD separati da
+		// ";" (telephoneNumber multi-valore) — mostrati "700, 701" invece
+		// del ";" grezzo di storage.
+		"extList": func(s string) string {
+			return strings.ReplaceAll(s, ";", ", ")
+		},
 		"substr": func(s string, start, length int) string {
 			if start < 0 || start >= len(s) {
 				return ""
@@ -122,10 +189,16 @@ func main() {
 
 	// Perform initial sync
 	go func() {
-		if err := ldap.SyncContacts(db, cfg); err != nil {
+		if err := ldap.SyncContacts(db, cfg, nil); err != nil {
 			log.Printf("[SYNC] Initial sync failed: %v", err)
 		} else {
 			lastSync = time.Now()
+		}
+		if result, err := pbx.SyncPBX(db, nil); err != nil {
+			log.Printf("[PBX] Initial sync failed: %v", err)
+		} else {
+			lastPBXSync = time.Now()
+			lastPBXSyncResult = result
 		}
 	}()
 
@@ -154,6 +227,7 @@ func main() {
 	admin.Use(requireAdmin)
 	admin.HandleFunc("", handleAdminDashboard).Methods("GET")
 	admin.HandleFunc("/sync", handleAdminSync).Methods("POST")
+	admin.HandleFunc("/sync/status", handleAdminSyncStatus).Methods("GET")
 	admin.HandleFunc("/config", handleAdminConfig).Methods("GET", "POST")
 	admin.HandleFunc("/groups", handleAdminListGroups).Methods("GET")
 	admin.HandleFunc("/groups", handleAdminCreateGroup).Methods("POST")
@@ -176,6 +250,10 @@ func main() {
 	admin.HandleFunc("/local-contacts/{uid}", handleAdminUpdateContact).Methods("POST")
 	admin.HandleFunc("/local-contacts/{uid}/delete", handleAdminDeleteContact).Methods("POST")
 	admin.HandleFunc("/contacts/{uid}/override", handleAdminContactOverride).Methods("POST")
+	admin.HandleFunc("/pbx", handleAdminPBX).Methods("GET")
+	admin.HandleFunc("/pbx", handleAdminSavePBXConfig).Methods("POST")
+	admin.HandleFunc("/pbx/sync", handleAdminSyncPBX).Methods("POST")
+	admin.HandleFunc("/pbx/sync/status", handleAdminSyncPBXStatus).Methods("GET")
 
 	// CardDAV server
 	carddavServer := carddav.NewServer(db, cfg)
@@ -199,10 +277,16 @@ func ldapSyncWorker() {
 
 	for range ticker.C {
 		log.Printf("[SYNC] Starting scheduled sync...")
-		if err := ldap.SyncContacts(db, cfg); err != nil {
+		if err := ldap.SyncContacts(db, cfg, nil); err != nil {
 			log.Printf("[SYNC] Failed: %v", err)
 		} else {
 			lastSync = time.Now()
+		}
+		if result, err := pbx.SyncPBX(db, nil); err != nil {
+			log.Printf("[PBX] Failed: %v", err)
+		} else {
+			lastPBXSync = time.Now()
+			lastPBXSyncResult = result
 		}
 	}
 }
@@ -337,10 +421,33 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		results = filtered
 	}
 
+	// Le chiamate di gruppo (group_numbers) compaiono in rubrica come i
+	// contatti, sotto l'area "Uffici" (key riservata "uffici", vedi
+	// migrate() in internal/database) oltre che nell'elenco non filtrato.
+	// Un filtro testuale le riguarda comunque: cerca anche per
+	// numero/nome del gruppo.
+	var callGroups []*phonebook.GroupWithMembers
+	if groupFilter == "" || groupFilter == "uffici" {
+		allGroups, err := pbService.ListGroupsWithMembers()
+		if err != nil {
+			log.Printf("[SEARCH] Failed to list call groups: %v", err)
+		} else if query == "" {
+			callGroups = allGroups
+		} else {
+			q := strings.ToLower(query)
+			for _, g := range allGroups {
+				if strings.Contains(strings.ToLower(g.Group.Name), q) || strings.Contains(g.Group.Number, q) {
+					callGroups = append(callGroups, g)
+				}
+			}
+		}
+	}
+
 	locale := i18n.ResolveLocale(r)
 	data := map[string]interface{}{
-		"Groups":   phonebook.GroupByDepartment(results),
-		"Messages": i18n.GetMessages(locale),
+		"Groups":     phonebook.GroupByDepartment(results),
+		"CallGroups": callGroups,
+		"Messages":   i18n.GetMessages(locale),
 	}
 
 	templates.ExecuteTemplate(w, "search_results.html", data)
@@ -514,17 +621,53 @@ func handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	templates.ExecuteTemplate(w, "admin.html", data)
 }
 
+// handleAdminSync avvia il sync LDAP manuale in background e ritorna subito
+// il frammento di stato "in corso" — la UI fa polling su /admin/sync/status
+// finché non risulta completato (successo o errore), invece di restare con
+// un bottone senza alcun feedback per tutta la durata del sync.
 func handleAdminSync(w http.ResponseWriter, r *http.Request) {
+	ldapManualSync.start()
 	go func() {
-		if err := ldap.SyncContacts(db, cfg); err != nil {
+		err := ldap.SyncContacts(db, cfg, func(done, total int) {
+			if total > 0 {
+				ldapManualSync.setPhase(fmt.Sprintf("Elaborazione contatti: %d/%d", done, total))
+			}
+		})
+		if err != nil {
 			log.Printf("[SYNC] Manual sync failed: %v", err)
 		} else {
 			lastSync = time.Now()
 			log.Printf("[SYNC] Manual sync completed")
 		}
+		ldapManualSync.finish(err)
 	}()
 
-	w.Write([]byte("Sync started"))
+	renderSyncStatus(w, r)
+}
+
+// handleAdminSyncStatus serve lo stato corrente per il polling htmx.
+func handleAdminSyncStatus(w http.ResponseWriter, r *http.Request) {
+	renderSyncStatus(w, r)
+}
+
+func renderSyncStatus(w http.ResponseWriter, r *http.Request) {
+	st := ldapManualSync.snapshot()
+	data := map[string]interface{}{
+		"Running": st.Running,
+		"Phase":   st.Phase,
+		"Message": st.Message,
+		"IsError": st.IsError,
+		"LastSync": func() string {
+			if lastSync.IsZero() {
+				return "mai"
+			}
+			return lastSync.Format("2006-01-02 15:04:05")
+		}(),
+		"StatusURL": "/admin/sync/status",
+		"OOBTarget": "last-sync-time",
+		"OOBLabel":  "",
+	}
+	templates.ExecuteTemplate(w, "sync_status.html", data)
 }
 
 func handleAdminConfig(w http.ResponseWriter, r *http.Request) {
@@ -720,11 +863,17 @@ func handleAdminContactSearch(w http.ResponseWriter, r *http.Request) {
 	groupID := vars["id"]
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 
+	var contacts []*database.Contact
+	var err error
 	if query == "" {
-		return
+		// Campo svuotato (es. cancellato col backspace dopo una ricerca):
+		// tornare ai candidati di default invece di lasciare il div
+		// vuoto — altrimenti htmx ci scrive dentro una risposta vuota e
+		// la lista sparisce fino al reload della pagina.
+		contacts, err = db.ListContactsWithNumber(20)
+	} else {
+		contacts, err = db.SearchContacts(query, 8)
 	}
-
-	contacts, err := db.SearchContacts(query, 8)
 	if err != nil {
 		http.Error(w, "Search failed", http.StatusInternalServerError)
 		return
@@ -920,7 +1069,7 @@ func handleAdminSaveOUMapping(w http.ResponseWriter, r *http.Request) {
 	}
 
 	go func() {
-		if err := ldap.SyncContacts(db, cfg); err != nil {
+		if err := ldap.SyncContacts(db, cfg, nil); err != nil {
 			log.Printf("[SYNC] Resync after OU mapping change failed: %v", err)
 		} else {
 			lastSync = time.Now()
@@ -1012,6 +1161,24 @@ func handleAdminRenameArea(w http.ResponseWriter, r *http.Request) {
 	if err := db.RenameArea(id, name); err != nil {
 		log.Printf("[ADMIN] Failed to rename area %d: %v", id, err)
 	}
+
+	// Regola per range interno (opzionale): entrambi i campi vuoti =
+	// nessuna regola (SetAreaRange con nil, nil la rimuove).
+	var rangeStart, rangeEnd *int
+	if v := strings.TrimSpace(r.FormValue("range_start")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			rangeStart = &n
+		}
+	}
+	if v := strings.TrimSpace(r.FormValue("range_end")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			rangeEnd = &n
+		}
+	}
+	if err := db.SetAreaRange(id, rangeStart, rangeEnd); err != nil {
+		log.Printf("[ADMIN] Failed to set area range %d: %v", id, err)
+	}
+
 	renderAdminAreas(w, r)
 }
 
@@ -1163,6 +1330,209 @@ func handleAdminContactOverride(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Write([]byte("Contact updated"))
+}
+
+// PBX admin handlers (config centralino, filtri, sync manuale)
+
+func pbxData(r *http.Request) map[string]interface{} {
+	url, user, pass := pbx.LoadPBXConfig(db)
+	filters := pbx.LoadFilters(db)
+
+	data := railData()
+	data["Messages"] = i18n.GetMessages(i18n.ResolveLocale(r))
+	data["Username"] = sessionAdminUsername(r)
+	data["Section"] = "admin-pbx"
+	data["PBXURL"] = url
+	data["PBXUser"] = user
+	data["PBXHasPassword"] = pass != ""
+	data["PBXExcludeUnnamed"] = filters.ExcludeUnnamed
+	data["PBXExcludeInactiveGroups"] = filters.ExcludeInactiveGroups
+	data["PBXExcludeEmptyGroups"] = filters.ExcludeEmptyGroups
+	if lastPBXSync.IsZero() {
+		data["LastPBXSync"] = "mai"
+	} else {
+		data["LastPBXSync"] = lastPBXSync.Format("2006-01-02 15:04:05")
+	}
+	data["UnmappedContacts"] = pbxUnmappedContacts()
+	data["NameMismatches"] = lastPBXSyncResult.Mismatches
+	data["ReclaimableExtensions"] = lastPBXSyncResult.Reclaimable
+	if dups, err := db.ListDuplicateExtensions(); err != nil {
+		log.Printf("[ADMIN] Failed to list duplicate extensions: %v", err)
+	} else {
+		data["DuplicateExtensions"] = dups
+	}
+	return data
+}
+
+// pbxUnmappedRow è un interno del centralino senza corrispondenza per
+// numero in dominio, con un'eventuale corrispondenza per nome (nome
+// centralino "LIKE" nome dominio, ordine parole e spazi non contano) — un
+// dipendente può avere l'account AD/LDAP ma senza il telefono compilato:
+// in quel caso non manca dal dominio, manca solo il numero nella sua
+// scheda AD, e PossibleMatch lo segnala.
+type pbxUnmappedRow struct {
+	*database.Contact
+	PossibleMatch string
+}
+
+// nameWords normalizza un nome per il confronto fuzzy: maiuscolo, diviso
+// in parole, scartando token troppo corti (iniziali, articoli) per non
+// generare falsi positivi.
+func nameWords(name string) map[string]bool {
+	words := map[string]bool{}
+	for _, w := range strings.Fields(strings.ToUpper(name)) {
+		if len(w) >= 3 {
+			words[w] = true
+		}
+	}
+	return words
+}
+
+// pbxUnmappedContacts elenca i contatti source='pbx' e prova ad
+// abbinarli per nome (non per interno, già escluso a monte dal sync) a un
+// contatto source='ldap' esistente — "nome centralino LIKE nome dominio",
+// indipendente dall'ordine delle parole (es. "Cognome Nome" vs
+// "Nome Cognome").
+func pbxUnmappedContacts() []pbxUnmappedRow {
+	pbxContacts, err := db.ListPBXContacts()
+	if err != nil {
+		log.Printf("[ADMIN] Failed to list PBX contacts: %v", err)
+		return nil
+	}
+	ldapContacts, err := db.ListContactsBySource("ldap")
+	if err != nil {
+		log.Printf("[ADMIN] Failed to list LDAP contacts for name matching: %v", err)
+		ldapContacts = nil
+	}
+
+	rows := make([]pbxUnmappedRow, 0, len(pbxContacts))
+	for _, c := range pbxContacts {
+		row := pbxUnmappedRow{Contact: c}
+		pbxWords := nameWords(c.DisplayName)
+		if len(pbxWords) > 0 {
+			for _, l := range ldapContacts {
+				ldapWords := nameWords(l.DisplayName)
+				shorter := len(pbxWords)
+				if len(ldapWords) < shorter {
+					shorter = len(ldapWords)
+				}
+				if shorter == 0 {
+					continue
+				}
+				matched := 0
+				for w := range pbxWords {
+					if ldapWords[w] {
+						matched++
+					}
+				}
+				if matched >= shorter {
+					row.PossibleMatch = l.DisplayName
+					break
+				}
+			}
+		}
+		if row.PossibleMatch != "" {
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
+// renderPBX re-renders solo il frammento (usato dopo save/sync via HTMX).
+func renderPBX(w http.ResponseWriter, r *http.Request) {
+	templates.ExecuteTemplate(w, "admin_pbx.html", pbxData(r))
+}
+
+// handleAdminPBX serve la pagina "Centralino" completa (navigazione diretta).
+func handleAdminPBX(w http.ResponseWriter, r *http.Request) {
+	templates.ExecuteTemplate(w, "admin_page_pbx.html", pbxData(r))
+}
+
+// handleAdminSavePBXConfig salva url/utente/password/filtri del centralino.
+// La password inviata vuota lascia invariata quella già salvata (non viene
+// mai ri-mostrata in chiaro nel form). Le checkbox dei filtri non compaiono
+// nel form POST quando deselezionate (comportamento standard HTML) — la
+// loro assenza va quindi letta come "false", non come "campo mancante".
+func handleAdminSavePBXConfig(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form", http.StatusBadRequest)
+		return
+	}
+
+	if err := db.SetConfig(pbx.PBXURLConfigKey, strings.TrimSpace(r.FormValue("pbx_url"))); err != nil {
+		http.Error(w, "Failed to save PBX URL", http.StatusInternalServerError)
+		return
+	}
+	if err := db.SetConfig(pbx.PBXUserConfigKey, strings.TrimSpace(r.FormValue("pbx_user"))); err != nil {
+		http.Error(w, "Failed to save PBX user", http.StatusInternalServerError)
+		return
+	}
+	if newPass := r.FormValue("pbx_pass"); newPass != "" {
+		if err := db.SetConfig(pbx.PBXPassConfigKey, newPass); err != nil {
+			http.Error(w, "Failed to save PBX password", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	filters := pbx.Filters{
+		ExcludeUnnamed:        r.FormValue("exclude_unnamed") != "",
+		ExcludeInactiveGroups: r.FormValue("exclude_inactive_groups") != "",
+		ExcludeEmptyGroups:    r.FormValue("exclude_empty_groups") != "",
+	}
+	if err := pbx.SaveFilters(db, filters); err != nil {
+		http.Error(w, "Failed to save PBX filters", http.StatusInternalServerError)
+		return
+	}
+
+	renderPBX(w, r)
+}
+
+// handleAdminSyncPBX avvia il sync PBX manuale in background e ritorna
+// subito il frammento di stato "in corso" nel div dedicato #pbx-sync-status
+// — senza toccare config/filtri già mostrati sulla pagina — la UI fa
+// polling su /admin/pbx/sync/status finché non risulta completato. Prima
+// era sincrono (bloccava la richiesta HTTP per l'intera durata dello
+// screen-scraping) e in caso di errore non mostrava nulla, solo un log.
+func handleAdminSyncPBX(w http.ResponseWriter, r *http.Request) {
+	pbxManualSync.start()
+	go func() {
+		result, err := pbx.SyncPBX(db, pbxManualSync.setPhase)
+		if err != nil {
+			log.Printf("[PBX] Manual sync failed: %v", err)
+		} else {
+			lastPBXSync = time.Now()
+			lastPBXSyncResult = result
+			log.Printf("[PBX] Manual sync completed")
+		}
+		pbxManualSync.finish(err)
+	}()
+
+	renderSyncStatusPBX(w, r)
+}
+
+// handleAdminSyncPBXStatus serve lo stato corrente per il polling htmx.
+func handleAdminSyncPBXStatus(w http.ResponseWriter, r *http.Request) {
+	renderSyncStatusPBX(w, r)
+}
+
+func renderSyncStatusPBX(w http.ResponseWriter, r *http.Request) {
+	st := pbxManualSync.snapshot()
+	data := map[string]interface{}{
+		"Running": st.Running,
+		"Phase":   st.Phase,
+		"Message": st.Message,
+		"IsError": st.IsError,
+		"LastSync": func() string {
+			if lastPBXSync.IsZero() {
+				return "mai"
+			}
+			return lastPBXSync.Format("2006-01-02 15:04:05")
+		}(),
+		"StatusURL": "/admin/pbx/sync/status",
+		"OOBTarget": "pbx-last-sync-time",
+		"OOBLabel":  "Ultimo sync riuscito: ",
+	}
+	templates.ExecuteTemplate(w, "sync_status.html", data)
 }
 
 // Helper function for vCard generation (reused from carddav package logic)

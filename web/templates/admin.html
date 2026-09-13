@@ -17,11 +17,12 @@
             <div class="grid2">
                 <div class="card">
                     <h3>{{index .Messages "last_sync"}}</h3>
-                    <div class="sync-time">{{.LastSync}}</div>
-                    <button hx-post="/admin/sync" hx-swap="none" class="btn btn-primary" style="flex:none;">
+                    <div class="sync-time" id="last-sync-time">{{.LastSync}}</div>
+                    <button hx-post="/admin/sync" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-primary" style="flex:none;">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.5 9a9 9 0 0114.5-4.5L23 10M1 14l5 4.5A9 9 0 0020.5 15"/></svg>
                         {{index .Messages "sync_now"}}
                     </button>
+                    <div id="sync-status"></div>
                 </div>
                 <div class="card">
                     <h3>{{index .Messages "primary_number_prefix"}}</h3>

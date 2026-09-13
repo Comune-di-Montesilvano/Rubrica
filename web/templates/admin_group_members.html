@@ -3,7 +3,7 @@
 
     <div style="margin-bottom:18px;">
         <div class="helptext" style="margin-bottom:6px;">{{index .Messages "add_member"}}</div>
-        <input type="text" class="input" style="width:100%;" placeholder="Cerca per nome..."
+        <input type="text" name="q" class="input" style="width:100%;" placeholder="Cerca per nome..."
                hx-get="/admin/groups/{{.Group.ID}}/contacts/search"
                hx-trigger="keyup changed delay:300ms"
                hx-target="#contact-search-results" hx-swap="innerHTML">
@@ -11,4 +11,11 @@
     </div>
 
     {{template "admin_members_list.html" .}}
+
+    <div style="display:flex;justify-content:flex-end;margin-top:18px;">
+        <button type="button" class="btn btn-primary" style="flex:none;"
+                onclick="document.getElementById('modal').setAttribute('hidden','')">
+            Chiudi
+        </button>
+    </div>
 </div>

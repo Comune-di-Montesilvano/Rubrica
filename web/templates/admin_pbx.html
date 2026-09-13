@@ -1,0 +1,164 @@
+<div class="card">
+    <h3>Configurazione centralino</h3>
+    <form hx-post="/admin/pbx" hx-target="#pbx-content" hx-swap="innerHTML" style="display:flex;flex-direction:column;gap:10px;margin-top:10px;">
+        <div>
+            <div class="helptext" style="margin-bottom:4px;">URL centralino</div>
+            <input type="text" name="pbx_url" value="{{.PBXURL}}" placeholder="https://192.0.2.10" class="input" style="width:100%;">
+        </div>
+        <div>
+            <div class="helptext" style="margin-bottom:4px;">Utente</div>
+            <input type="text" name="pbx_user" value="{{.PBXUser}}" class="input" style="width:100%;">
+        </div>
+        <div>
+            <div class="helptext" style="margin-bottom:4px;">Password</div>
+            <input type="password" name="pbx_pass" value="" placeholder="{{if .PBXHasPassword}}(lasciare vuoto per non modificare){{else}}nessuna password salvata{{end}}" class="input" style="width:100%;">
+        </div>
+        <button type="submit" class="btn btn-primary" style="flex:none;align-self:flex-start;">{{index .Messages "save"}}</button>
+    </form>
+</div>
+
+<div class="card" style="margin-top:16px;">
+    <h3>Filtri di esclusione</h3>
+    <form hx-post="/admin/pbx" hx-target="#pbx-content" hx-swap="innerHTML" style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
+        <input type="hidden" name="pbx_url" value="{{.PBXURL}}">
+        <input type="hidden" name="pbx_user" value="{{.PBXUser}}">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;">
+            <input type="checkbox" name="exclude_unnamed" {{if .PBXExcludeUnnamed}}checked{{end}}>
+            Escludi contatti senza nome (es. interno mostrato come "&lt;534&gt;")
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;">
+            <input type="checkbox" name="exclude_inactive_groups" {{if .PBXExcludeInactiveGroups}}checked{{end}}>
+            Escludi gruppi di chiamata disattivi sul centralino
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;">
+            <input type="checkbox" name="exclude_empty_groups" {{if .PBXExcludeEmptyGroups}}checked{{end}}>
+            Escludi gruppi di chiamata senza destinatari
+        </label>
+        <button type="submit" class="btn btn-ghost" style="flex:none;align-self:flex-start;">{{index .Messages "save"}}</button>
+    </form>
+</div>
+
+<div class="card" style="margin-top:16px;">
+    <h3>Sincronizzazione</h3>
+    <div class="sync-time" style="font-size:15px;" id="pbx-last-sync-time">Ultimo sync riuscito: {{.LastPBXSync}}</div>
+    <button hx-post="/admin/pbx/sync" hx-target="#pbx-sync-status" hx-swap="innerHTML" class="btn btn-primary" style="flex:none;">Sincronizza ora</button>
+    <div id="pbx-sync-status"></div>
+</div>
+
+<div class="card" style="margin-top:16px;">
+    <h3>Numero di telefono mancante in AD</h3>
+    <div class="helptext" style="margin-bottom:10px;">
+        Persone già censite in dominio (nome corrispondente) il cui interno sul centralino non è nella loro scheda AD/LDAP — probabilmente basta compilare il numero di telefono in AD.
+    </div>
+    {{if .UnmappedContacts}}
+    <div class="modal-scroll-x">
+    <table>
+        <thead>
+            <tr>
+                <th>Nome in dominio</th>
+                <th>Interno sul centralino</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .UnmappedContacts}}
+            <tr>
+                <td>{{.PossibleMatch}}</td>
+                <td class="num">{{extList .LDAPExt}}</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    </div>
+    {{else}}
+    <p class="helptext" style="text-align:center;padding:16px 0;">Nessuna corrispondenza da segnalare.</p>
+    {{end}}
+</div>
+
+<div class="card" style="margin-top:16px;">
+    <h3>Nomi diversi tra centralino e dominio</h3>
+    <div class="helptext" style="margin-bottom:10px;">
+        Stesso interno presente sia in AD/LDAP sia sul centralino, ma con nomi che non hanno nulla in comune — probabile numero riassegnato senza aggiornare uno dei due sistemi. Calcolato all'ultimo sync PBX riuscito.
+    </div>
+    {{if .NameMismatches}}
+    <div class="modal-scroll-x">
+    <table>
+        <thead>
+            <tr>
+                <th>Interno</th>
+                <th>Nome in dominio</th>
+                <th>Nome sul centralino</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .NameMismatches}}
+            <tr>
+                <td class="num">{{.Extension}}</td>
+                <td>{{.DomainName}}</td>
+                <td>{{.PBXName}}</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    </div>
+    {{else}}
+    <p class="helptext" style="text-align:center;padding:16px 0;">Nessun disallineamento da segnalare.</p>
+    {{end}}
+</div>
+
+<div class="card" style="margin-top:16px;">
+    <h3>Interno condiviso da più persone in dominio</h3>
+    <div class="helptext" style="margin-bottom:10px;">
+        Più contatti attivi in AD/LDAP con lo stesso interno — probabile refuso da correggere in AD (due persone abilitate non dovrebbero condividere un numero).
+    </div>
+    {{if .DuplicateExtensions}}
+    <div class="modal-scroll-x">
+    <table>
+        <thead>
+            <tr>
+                <th>Interno</th>
+                <th>Persone</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .DuplicateExtensions}}
+            <tr>
+                <td class="num">{{.Extension}}</td>
+                <td>{{range $i, $n := .Names}}{{if $i}}, {{end}}{{$n}}{{end}}</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    </div>
+    {{else}}
+    <p class="helptext" style="text-align:center;padding:16px 0;">Nessun interno duplicato in dominio.</p>
+    {{end}}
+</div>
+
+<div class="card" style="margin-top:16px;">
+    <h3>Numeri riciclabili</h3>
+    <div class="helptext" style="margin-bottom:10px;">
+        Stesso nome, stesso interno su centralino e dominio — ma la persona è disabilitata in AD. Il numero è libero per essere riassegnato. Calcolato all'ultimo sync PBX riuscito.
+    </div>
+    {{if .ReclaimableExtensions}}
+    <div class="modal-scroll-x">
+    <table>
+        <thead>
+            <tr>
+                <th>Interno</th>
+                <th>Nome (dominio, disabilitato)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .ReclaimableExtensions}}
+            <tr>
+                <td class="num">{{.Extension}}</td>
+                <td>{{.DomainName}}</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    </div>
+    {{else}}
+    <p class="helptext" style="text-align:center;padding:16px 0;">Nessun numero riciclabile da segnalare.</p>
+    {{end}}
+</div>

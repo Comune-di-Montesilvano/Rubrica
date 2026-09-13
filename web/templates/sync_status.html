@@ -1,0 +1,9 @@
+{{if .Running}}
+<div class="sync-status running" hx-get="{{.StatusURL}}" hx-trigger="load delay:1200ms" hx-target="this" hx-swap="outerHTML">
+    <svg class="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.5 9a9 9 0 0114.5-4.5L23 10M1 14l5 4.5A9 9 0 0020.5 15"/></svg>
+    {{.Phase}}
+</div>
+{{else}}
+<div class="sync-status {{if .IsError}}error{{else}}success{{end}}">{{.Message}}</div>
+{{if .OOBTarget}}<div id="{{.OOBTarget}}" hx-swap-oob="innerHTML">{{.OOBLabel}}{{.LastSync}}</div>{{end}}
+{{end}}

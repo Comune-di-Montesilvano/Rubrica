@@ -5,12 +5,12 @@
             hx-post="/admin/groups/{{$.GroupID}}/members"
             hx-vals='{"contact_id": "{{.ID}}"}'
             hx-target="#members-list" hx-swap="outerHTML"
-            onclick="this.closest('.search-dropdown').remove()">
+            hx-on::after-request="this.closest('.search-dropdown').remove()">
         <span class="who">
             <span class="name">{{.DisplayName}}</span>
             {{if .Department}}<span class="role">{{sentenceCase .Department}}</span>{{end}}
         </span>
-        <span class="role">{{if .LDAPExt}}int. {{.LDAPExt}}{{else if .PrimaryNumber}}{{.PrimaryNumber}}{{end}}</span>
+        <span class="role">{{if .LDAPExt}}int. {{extList .LDAPExt}}{{else if .PrimaryNumber}}{{.PrimaryNumber}}{{end}}</span>
     </button>
     {{end}}
 </div>
