@@ -31,10 +31,21 @@
         {{range .Groups}}
         <tr>
             <td class="num">{{.Group.Number}}</td>
-            <td>{{.Group.Name}}</td>
+            <td>
+                {{.Group.Name}}
+                {{if eq .Group.Source "pbx"}}
+                <span class="src-tag" title="Importato dal centralino: nome e membri gestiti automaticamente dal sync, non modificabili qui">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.362 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.338 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
+                    Centralino
+                </span>
+                {{end}}
+            </td>
             <td class="member-count">{{if .Group.Description}}{{.Group.Description}}{{else}}&mdash;{{end}}</td>
             <td class="member-count">{{len .Members}}</td>
             <td>
+                {{if eq .Group.Source "pbx"}}
+                <span class="helptext">Gestito dal centralino</span>
+                {{else}}
                 <div class="row-actions">
                     <button hx-get="/admin/groups/{{.Group.ID}}/members" hx-target="#modal-content"
                             onclick="document.getElementById('modal').removeAttribute('hidden')"
@@ -43,6 +54,7 @@
                             hx-target="#groups-content" hx-swap="outerHTML"
                             class="btn-danger">{{index $.Messages "delete"}}</button>
                 </div>
+                {{end}}
             </td>
         </tr>
         {{end}}

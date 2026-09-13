@@ -723,14 +723,17 @@ func (db *DB) ListContactsWithNumber(limit int) ([]*Contact, error) {
 	return contacts, nil
 }
 
-// ListActiveLDAPExtensionNames mappa ogni interno (ogni token ";"-separato
-// di ldap_ext) dei contatti source='ldap' attivi (non disabled, non
-// soft-deleted) al nome del contatto — usato per confrontare nome dominio
-// e nome centralino sullo stesso interno (segnalare disallineamenti).
-func (db *DB) ListActiveLDAPExtensionNames() (map[string]string, error) {
-	rows, err := db.Query(`SELECT display_name, ldap_ext FROM contacts WHERE source = 'ldap' AND deleted_at IS NULL AND disabled = 0 AND ldap_ext IS NOT NULL AND ldap_ext != ''`)
+// listLDAPExtensionNames mappa ogni interno (ogni token ";"-separato di
+// ldap_ext) dei contatti source='ldap' non soft-deleted, filtrati per
+// disabled, al nome del contatto.
+func (db *DB) listLDAPExtensionNames(disabled bool) (map[string]string, error) {
+	disabledInt := 0
+	if disabled {
+		disabledInt = 1
+	}
+	rows, err := db.Query(`SELECT display_name, ldap_ext FROM contacts WHERE source = 'ldap' AND deleted_at IS NULL AND disabled = ? AND ldap_ext IS NOT NULL AND ldap_ext != ''`, disabledInt)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list active ldap extension names: %w", err)
+		return nil, fmt.Errorf("failed to list ldap extension names: %w", err)
 	}
 	defer rows.Close()
 
@@ -745,6 +748,23 @@ func (db *DB) ListActiveLDAPExtensionNames() (map[string]string, error) {
 		}
 	}
 	return names, rows.Err()
+}
+
+// ListActiveLDAPExtensionNames mappa ogni interno (ogni token ";"-separato
+// di ldap_ext) dei contatti source='ldap' attivi (non disabled, non
+// soft-deleted) al nome del contatto — usato per confrontare nome dominio
+// e nome centralino sullo stesso interno (segnalare disallineamenti).
+func (db *DB) ListActiveLDAPExtensionNames() (map[string]string, error) {
+	return db.listLDAPExtensionNames(false)
+}
+
+// ListDisabledLDAPExtensionNames come ListActiveLDAPExtensionNames ma per
+// i contatti disabled=1 — usato per trovare interni ancora attivi sul
+// centralino ma il cui titolare in AD è disabilitato: numeri "riciclabili"
+// (la persona non c'è più/non usa più quell'interno, il numero è libero
+// per essere riassegnato).
+func (db *DB) ListDisabledLDAPExtensionNames() (map[string]string, error) {
+	return db.listLDAPExtensionNames(true)
 }
 
 // DuplicateExtension segnala un interno condiviso da più contatti attivi

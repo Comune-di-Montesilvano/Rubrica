@@ -33,11 +33,11 @@ var (
 	pbService   *phonebook.Service
 	lastSync    time.Time
 	lastPBXSync time.Time
-	// lastPBXNameMismatches sono gli interni dove nome centralino e nome
-	// dominio non concordano, calcolati dall'ultimo sync PBX riuscito (non
-	// esiste un modo economico per ricalcolarli senza interrogare di nuovo
-	// il centralino, quindi restano validi fino al prossimo sync).
-	lastPBXNameMismatches []pbx.NameMismatch
+	// lastPBXSyncResult raccoglie le diagnostiche (mismatch nome, interni
+	// riciclabili) calcolate dall'ultimo sync PBX riuscito — non esiste un
+	// modo economico per ricalcolarle senza interrogare di nuovo il
+	// centralino, quindi restano valide fino al prossimo sync.
+	lastPBXSyncResult pbx.SyncResult
 )
 
 // syncStatus è lo stato di un sync manuale in corso, mostrato dalla UI
@@ -194,11 +194,11 @@ func main() {
 		} else {
 			lastSync = time.Now()
 		}
-		if mismatches, err := pbx.SyncPBX(db, nil); err != nil {
+		if result, err := pbx.SyncPBX(db, nil); err != nil {
 			log.Printf("[PBX] Initial sync failed: %v", err)
 		} else {
 			lastPBXSync = time.Now()
-			lastPBXNameMismatches = mismatches
+			lastPBXSyncResult = result
 		}
 	}()
 
@@ -282,11 +282,11 @@ func ldapSyncWorker() {
 		} else {
 			lastSync = time.Now()
 		}
-		if mismatches, err := pbx.SyncPBX(db, nil); err != nil {
+		if result, err := pbx.SyncPBX(db, nil); err != nil {
 			log.Printf("[PBX] Failed: %v", err)
 		} else {
 			lastPBXSync = time.Now()
-			lastPBXNameMismatches = mismatches
+			lastPBXSyncResult = result
 		}
 	}
 }
@@ -1313,7 +1313,8 @@ func pbxData(r *http.Request) map[string]interface{} {
 		data["LastPBXSync"] = lastPBXSync.Format("2006-01-02 15:04:05")
 	}
 	data["UnmappedContacts"] = pbxUnmappedContacts()
-	data["NameMismatches"] = lastPBXNameMismatches
+	data["NameMismatches"] = lastPBXSyncResult.Mismatches
+	data["ReclaimableExtensions"] = lastPBXSyncResult.Reclaimable
 	if dups, err := db.ListDuplicateExtensions(); err != nil {
 		log.Printf("[ADMIN] Failed to list duplicate extensions: %v", err)
 	} else {
@@ -1454,12 +1455,12 @@ func handleAdminSavePBXConfig(w http.ResponseWriter, r *http.Request) {
 func handleAdminSyncPBX(w http.ResponseWriter, r *http.Request) {
 	pbxManualSync.start()
 	go func() {
-		mismatches, err := pbx.SyncPBX(db, pbxManualSync.setPhase)
+		result, err := pbx.SyncPBX(db, pbxManualSync.setPhase)
 		if err != nil {
 			log.Printf("[PBX] Manual sync failed: %v", err)
 		} else {
 			lastPBXSync = time.Now()
-			lastPBXNameMismatches = mismatches
+			lastPBXSyncResult = result
 			log.Printf("[PBX] Manual sync completed")
 		}
 		pbxManualSync.finish(err)

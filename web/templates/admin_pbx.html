@@ -133,3 +133,32 @@
     <p class="helptext" style="text-align:center;padding:16px 0;">Nessun interno duplicato in dominio.</p>
     {{end}}
 </div>
+
+<div class="card" style="margin-top:16px;">
+    <h3>Numeri riciclabili</h3>
+    <div class="helptext" style="margin-bottom:10px;">
+        Stesso nome, stesso interno su centralino e dominio — ma la persona è disabilitata in AD. Il numero è libero per essere riassegnato. Calcolato all'ultimo sync PBX riuscito.
+    </div>
+    {{if .ReclaimableExtensions}}
+    <div class="modal-scroll-x">
+    <table>
+        <thead>
+            <tr>
+                <th>Interno</th>
+                <th>Nome (dominio, disabilitato)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .ReclaimableExtensions}}
+            <tr>
+                <td class="num">{{.Extension}}</td>
+                <td>{{.DomainName}}</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    </div>
+    {{else}}
+    <p class="helptext" style="text-align:center;padding:16px 0;">Nessun numero riciclabile da segnalare.</p>
+    {{end}}
+</div>

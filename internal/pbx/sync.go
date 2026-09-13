@@ -191,6 +191,52 @@ func FindNameMismatches(db *database.DB, peers []Peer) ([]NameMismatch, error) {
 	return mismatches, nil
 }
 
+// ReclaimableExtension segnala un interno ancora presente e attivo sul
+// centralino, con nome corrispondente (fuzzy) al titolare in AD/LDAP, ma
+// quel titolare è disabled=true — la persona non c'è più/non usa più
+// quell'interno: il numero è candidato per essere riassegnato.
+type ReclaimableExtension struct {
+	Extension  string
+	DomainName string
+	PBXName    string
+}
+
+// FindReclaimableExtensions confronta ogni peer del centralino con
+// l'omonimo interno di un contatto di dominio DISABILITATO (se esiste) e
+// segnala quelli il cui nome coincide (fuzzy) — a differenza di
+// FindNameMismatches, qui il nome DEVE combaciare: è la conferma che si
+// tratta della stessa persona, solo disattivata in AD ma il cui interno è
+// ancora "occupato" sul centralino.
+func FindReclaimableExtensions(db *database.DB, peers []Peer) ([]ReclaimableExtension, error) {
+	disabledNames, err := db.ListDisabledLDAPExtensionNames()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list disabled ldap extension names: %w", err)
+	}
+	var reclaimable []ReclaimableExtension
+	for _, p := range peers {
+		domainName, ok := disabledNames[p.Extension]
+		if !ok || p.CallerID == "" {
+			continue
+		}
+		if namesLookAlike(domainName, p.CallerID) {
+			reclaimable = append(reclaimable, ReclaimableExtension{
+				Extension:  p.Extension,
+				DomainName: domainName,
+				PBXName:    p.CallerID,
+			})
+		}
+	}
+	return reclaimable, nil
+}
+
+// SyncResult raccoglie le diagnostiche calcolate durante un giro di sync,
+// oltre all'applicazione vera e propria dei dati — mostrate dalla pagina
+// admin /admin/pbx per aiutare a tenere allineati centralino e dominio.
+type SyncResult struct {
+	Mismatches  []NameMismatch
+	Reclaimable []ReclaimableExtension
+}
+
 // SyncPBX esegue un giro completo di sync (login, fetch, filtra, applica).
 // No-op silenzioso se l'URL non è ancora configurato da /admin/pbx —
 // subsystem disattivo. Un errore di rete/login/parsing salta l'intero giro
@@ -200,13 +246,13 @@ func FindNameMismatches(db *database.DB, peers []Peer) ([]NameMismatch, error) {
 // ma un giro può comunque richiedere secondi se il centralino è lento a
 // rispondere: onPhase dà alla UI qualcosa da mostrare invece di un bottone
 // "appeso" senza feedback.
-func SyncPBX(db *database.DB, onPhase func(phase string)) ([]NameMismatch, error) {
+func SyncPBX(db *database.DB, onPhase func(phase string)) (SyncResult, error) {
 	if onPhase == nil {
 		onPhase = func(phase string) {}
 	}
 	url, user, pass := LoadPBXConfig(db)
 	if url == "" {
-		return nil, nil
+		return SyncResult{}, nil
 	}
 
 	log.Printf("[PBX] Starting PBX sync...")
@@ -214,48 +260,51 @@ func SyncPBX(db *database.DB, onPhase func(phase string)) ([]NameMismatch, error
 	onPhase("Accesso al centralino...")
 	client := NewClient(url)
 	if err := client.Login(user, pass); err != nil {
-		return nil, fmt.Errorf("pbx login failed: %w", err)
+		return SyncResult{}, fmt.Errorf("pbx login failed: %w", err)
 	}
 
 	onPhase("Recupero interni...")
 	peers, err := client.FetchPeers()
 	if err != nil {
-		return nil, fmt.Errorf("pbx fetch peers failed: %w", err)
+		return SyncResult{}, fmt.Errorf("pbx fetch peers failed: %w", err)
 	}
 
 	onPhase("Recupero gruppi di chiamata...")
 	groups, err := client.FetchCallGroups()
 	if err != nil {
-		return nil, fmt.Errorf("pbx fetch call groups failed: %w", err)
+		return SyncResult{}, fmt.Errorf("pbx fetch call groups failed: %w", err)
 	}
 
 	filters := LoadFilters(db)
 	peers = FilterPeers(peers, filters)
 	groups = FilterCallGroups(groups, filters)
 
-	// Il confronto nome PBX/dominio va fatto sui peer ancora "grezzi" (già
-	// filtrati dai placeholder, ma prima di ApplyPeers): ApplyPeers scarta
-	// silenziosamente qualunque peer il cui interno è già coperto da un
-	// contatto di dominio, che è esattamente l'insieme su cui ha senso
-	// controllare se i due nomi coincidono.
-	mismatches, err := FindNameMismatches(db, peers)
-	if err != nil {
+	// I confronti nome PBX/dominio vanno fatti sui peer ancora "grezzi"
+	// (già filtrati dai placeholder, ma prima di ApplyPeers): ApplyPeers
+	// scarta silenziosamente qualunque peer il cui interno è già coperto
+	// da un contatto di dominio (attivo o disabled), che è esattamente
+	// l'insieme su cui ha senso questi controlli.
+	result := SyncResult{}
+	if result.Mismatches, err = FindNameMismatches(db, peers); err != nil {
 		log.Printf("[PBX] Failed to compute name mismatches: %v", err)
-		mismatches = nil
+	}
+	if result.Reclaimable, err = FindReclaimableExtensions(db, peers); err != nil {
+		log.Printf("[PBX] Failed to compute reclaimable extensions: %v", err)
 	}
 
 	onPhase("Applicazione dati...")
 	applied, err := ApplyPeers(db, peers, time.Now())
 	if err != nil {
-		return mismatches, fmt.Errorf("pbx apply peers failed: %w", err)
+		return result, fmt.Errorf("pbx apply peers failed: %w", err)
 	}
 
 	if err := ApplyCallGroups(db, groups); err != nil {
-		return mismatches, fmt.Errorf("pbx apply call groups failed: %w", err)
+		return result, fmt.Errorf("pbx apply call groups failed: %w", err)
 	}
 
-	log.Printf("[PBX] Sync completed: %d peers applied, %d call groups, %d name mismatches", applied, len(groups), len(mismatches))
-	return mismatches, nil
+	log.Printf("[PBX] Sync completed: %d peers applied, %d call groups, %d name mismatches, %d reclaimable extensions",
+		applied, len(groups), len(result.Mismatches), len(result.Reclaimable))
+	return result, nil
 }
 
 // ApplyPeers upserta come contacts source='pbx' i peer non già coperti da

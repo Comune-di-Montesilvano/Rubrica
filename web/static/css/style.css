@@ -290,6 +290,10 @@ td.num { font-variant-numeric: tabular-nums; font-weight: 600; }
 .sync-status.success { color: var(--accent); }
 .sync-status.error { color: var(--danger); }
 
+/* --- Source tag (gruppo manuale/da centralino) --- */
+.src-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 2px 7px; border-radius: 20px; background: var(--accent-tint); color: var(--accent); margin-left: 6px; white-space: nowrap; vertical-align: middle; }
+.src-tag svg { width: 11px; height: 11px; }
+
 /* --- Responsive --- */
 
 @media (max-width: 768px) {
