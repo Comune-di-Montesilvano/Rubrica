@@ -421,10 +421,33 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		results = filtered
 	}
 
+	// Le chiamate di gruppo (group_numbers) compaiono in rubrica come i
+	// contatti, sotto l'area "Uffici" (key riservata "uffici", vedi
+	// migrate() in internal/database) oltre che nell'elenco non filtrato.
+	// Un filtro testuale le riguarda comunque: cerca anche per
+	// numero/nome del gruppo.
+	var callGroups []*phonebook.GroupWithMembers
+	if groupFilter == "" || groupFilter == "uffici" {
+		allGroups, err := pbService.ListGroupsWithMembers()
+		if err != nil {
+			log.Printf("[SEARCH] Failed to list call groups: %v", err)
+		} else if query == "" {
+			callGroups = allGroups
+		} else {
+			q := strings.ToLower(query)
+			for _, g := range allGroups {
+				if strings.Contains(strings.ToLower(g.Group.Name), q) || strings.Contains(g.Group.Number, q) {
+					callGroups = append(callGroups, g)
+				}
+			}
+		}
+	}
+
 	locale := i18n.ResolveLocale(r)
 	data := map[string]interface{}{
-		"Groups":   phonebook.GroupByDepartment(results),
-		"Messages": i18n.GetMessages(locale),
+		"Groups":     phonebook.GroupByDepartment(results),
+		"CallGroups": callGroups,
+		"Messages":   i18n.GetMessages(locale),
 	}
 
 	templates.ExecuteTemplate(w, "search_results.html", data)

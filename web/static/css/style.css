@@ -294,6 +294,29 @@ td.num { font-variant-numeric: tabular-nums; font-weight: 600; }
 .src-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 2px 7px; border-radius: 20px; background: var(--accent-tint); color: var(--accent); margin-left: 6px; white-space: nowrap; vertical-align: middle; }
 .src-tag svg { width: 11px; height: 11px; }
 
+/* --- Popover appartenenza a chiamata di gruppo (righe rubrica pubblica) --- */
+.group-pop { position: relative; display: inline-block; margin-left: 6px; vertical-align: middle; }
+.group-pop summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; color: var(--accent); }
+.group-pop summary::-webkit-details-marker { display: none; }
+.group-pop summary svg { width: 14px; height: 14px; }
+.group-pop-content {
+    position: absolute; top: 100%; left: 0; z-index: 20; margin-top: 6px;
+    background: var(--paper-raised); border: 1px solid var(--line); border-radius: 7px;
+    padding: 8px 12px; font-size: 12.5px; white-space: nowrap; box-shadow: 0 4px 14px rgba(0,0,0,.18);
+}
+.group-pop-content div { padding: 2px 0; }
+
+/* --- Riga "chiamata di gruppo" nella rubrica pubblica --- */
+.group-row-details { border-bottom: 1px solid var(--line); }
+.group-row-details > summary { list-style: none; cursor: pointer; }
+.group-row-details > summary::-webkit-details-marker { display: none; }
+.group-row-details .row { border-bottom: none; }
+.group-members { padding: 4px 4px 12px 43px; display: flex; flex-direction: column; gap: 6px; }
+.group-member-line { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; color: var(--ink-soft); }
+.group-badge { background: var(--accent-tint); color: var(--accent); border-color: transparent; }
+.chevron { width: 14px; height: 14px; color: var(--muted); transition: transform .15s; flex: none; }
+.group-row-details[open] .chevron { transform: rotate(90deg); }
+
 /* --- Responsive --- */
 
 @media (max-width: 768px) {

@@ -201,6 +201,19 @@ func (db *DB) migrate() error {
 		}
 	}
 
+	// Area "Uffici": non un'area OU-mappata come le altre, ma il posto dove
+	// vivono le chiamate di gruppo nella rubrica pubblica (vedi handleSearch
+	// in cmd/server) — key riservata "uffici", creata idempotentemente
+	// (indipendente dal seed dei default sopra, che parte solo a tabella
+	// vuota) così compare nel filtro Area anche su un DB già esistente.
+	var ufficiCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM areas WHERE key = 'uffici'`).Scan(&ufficiCount); err == nil && ufficiCount == 0 {
+		now := time.Now()
+		if _, err := db.Exec(`INSERT INTO areas (key, name, created_at, updated_at) VALUES ('uffici', 'Uffici', ?, ?)`, now, now); err != nil {
+			log.Printf("[DATABASE] Warning seeding area 'uffici': %v", err)
+		}
+	}
+
 	return nil
 }
 

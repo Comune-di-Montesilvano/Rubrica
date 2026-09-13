@@ -194,8 +194,8 @@ func TestAreaCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAreas failed: %v", err)
 	}
-	if len(areas) != 3 {
-		t.Fatalf("got %d seeded areas, want 3 (interni/esterni/politica)", len(areas))
+	if len(areas) != 4 {
+		t.Fatalf("got %d seeded areas, want 4 (interni/esterni/politica/uffici)", len(areas))
 	}
 
 	a := &Area{Key: "estero", Name: "Estero"}

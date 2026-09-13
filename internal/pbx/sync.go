@@ -85,6 +85,21 @@ func SaveFilters(db *database.DB, f Filters) error {
 // parentesi angolari ovunque nella stringa — es. "Interno <592>",
 // "700 <700>", "prova<853>" — quindi il confronto è "contiene <extension>",
 // non un match esatto sull'intera stringa.
+// isNumericExtension è vero se ext è composto solo da cifre — gli interni
+// veri sul centralino sono sempre numerici; trunk/gateway (es. "gw") non lo
+// sono e non vanno mai trasformati in contatti.
+func isNumericExtension(ext string) bool {
+	if ext == "" {
+		return false
+	}
+	for _, r := range ext {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func isPlaceholderName(callerID, extension string) bool {
 	if extension == "" {
 		return false
@@ -323,6 +338,13 @@ func ApplyPeers(db *database.DB, peers []Peer, syncTime time.Time) (int, error) 
 	applied := 0
 	for _, p := range peers {
 		if _, ok := inDomain[p.Extension]; ok {
+			continue
+		}
+		// I trunk/gateway del centralino (es. extension "gw") non sono
+		// persone: compaiono tra i peer SIP ma non hanno un interno
+		// numerico reale — mai contatti, altrimenti finiscono nei
+		// risultati del filtro "solo numero" come voce senza nome.
+		if !isNumericExtension(p.Extension) {
 			continue
 		}
 		c := &database.Contact{
