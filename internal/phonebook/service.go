@@ -1,6 +1,8 @@
 package phonebook
 
 import (
+	"sort"
+
 	"github.com/mirkochipdotcom/ldavsync/internal/database"
 )
 
@@ -135,4 +137,51 @@ func (s *Service) ListGroupsWithMembers() ([]*GroupWithMembers, error) {
 	}
 
 	return results, nil
+}
+
+// DepartmentGroup è un'intestazione reparto con i contatti al suo interno,
+// usata per la vista a gruppi collassabili (dept-head + righe dense in
+// search_results.html).
+type DepartmentGroup struct {
+	Name     string
+	Contacts []*ContactWithGroups
+}
+
+// GroupByDepartment raggruppa i contatti per Department (etichetta così
+// com'è, non normalizzata qui — la sentence-case è responsabilità del
+// template). I contatti senza reparto vengono raggruppati per Area invece:
+// "politica" -> "Amministrazione politica", altrimenti -> "Senza reparto".
+// I gruppi sono ordinati per numero di membri decrescente, poi
+// alfabeticamente; i contatti mantengono l'ordine di arrivo (i chiamanti
+// passano risultati già ordinati per display_name dalla query DB).
+func GroupByDepartment(contacts []*ContactWithGroups) []*DepartmentGroup {
+	index := make(map[string]int)
+	groups := make([]*DepartmentGroup, 0)
+
+	for _, c := range contacts {
+		name := c.Contact.Department
+		if name == "" {
+			if c.Contact.Area == "politica" {
+				name = "Amministrazione politica"
+			} else {
+				name = "Senza reparto"
+			}
+		}
+		i, ok := index[name]
+		if !ok {
+			i = len(groups)
+			index[name] = i
+			groups = append(groups, &DepartmentGroup{Name: name})
+		}
+		groups[i].Contacts = append(groups[i].Contacts, c)
+	}
+
+	sort.SliceStable(groups, func(i, j int) bool {
+		if len(groups[i].Contacts) != len(groups[j].Contacts) {
+			return len(groups[i].Contacts) > len(groups[j].Contacts)
+		}
+		return groups[i].Name < groups[j].Name
+	})
+
+	return groups
 }
