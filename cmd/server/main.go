@@ -19,17 +19,19 @@ import (
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/i18n"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/ldap"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/pbx"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/phonebook"
 )
 
 var (
-	AppVersion = "dev"
-	templates  *template.Template
-	store      *sessions.CookieStore
-	db         *database.DB
-	cfg        *config.Config
-	pbService  *phonebook.Service
-	lastSync   time.Time
+	AppVersion  = "dev"
+	templates   *template.Template
+	store       *sessions.CookieStore
+	db          *database.DB
+	cfg         *config.Config
+	pbService   *phonebook.Service
+	lastSync    time.Time
+	lastPBXSync time.Time
 )
 
 func main() {
@@ -127,6 +129,11 @@ func main() {
 		} else {
 			lastSync = time.Now()
 		}
+		if err := pbx.SyncPBX(db); err != nil {
+			log.Printf("[PBX] Initial sync failed: %v", err)
+		} else {
+			lastPBXSync = time.Now()
+		}
 	}()
 
 	// Setup router
@@ -203,6 +210,11 @@ func ldapSyncWorker() {
 			log.Printf("[SYNC] Failed: %v", err)
 		} else {
 			lastSync = time.Now()
+		}
+		if err := pbx.SyncPBX(db); err != nil {
+			log.Printf("[PBX] Failed: %v", err)
+		} else {
+			lastPBXSync = time.Now()
 		}
 	}
 }
