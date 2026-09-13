@@ -183,6 +183,9 @@ func main() {
 	admin.HandleFunc("/local-contacts/{uid}", handleAdminUpdateContact).Methods("POST")
 	admin.HandleFunc("/local-contacts/{uid}/delete", handleAdminDeleteContact).Methods("POST")
 	admin.HandleFunc("/contacts/{uid}/override", handleAdminContactOverride).Methods("POST")
+	admin.HandleFunc("/pbx", handleAdminPBX).Methods("GET")
+	admin.HandleFunc("/pbx", handleAdminSavePBXConfig).Methods("POST")
+	admin.HandleFunc("/pbx/sync", handleAdminSyncPBX).Methods("POST")
 
 	// CardDAV server
 	carddavServer := carddav.NewServer(db, cfg)
@@ -1175,6 +1178,91 @@ func handleAdminContactOverride(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Write([]byte("Contact updated"))
+}
+
+// PBX admin handlers (config centralino, filtri, sync manuale)
+
+func pbxData(r *http.Request) map[string]interface{} {
+	url, user, pass := pbx.LoadPBXConfig(db)
+	filters := pbx.LoadFilters(db)
+
+	data := railData()
+	data["Username"] = sessionAdminUsername(r)
+	data["Section"] = "admin-pbx"
+	data["PBXURL"] = url
+	data["PBXUser"] = user
+	data["PBXHasPassword"] = pass != ""
+	data["PBXExcludeUnnamed"] = filters.ExcludeUnnamed
+	data["PBXExcludeInactiveGroups"] = filters.ExcludeInactiveGroups
+	data["PBXExcludeEmptyGroups"] = filters.ExcludeEmptyGroups
+	if lastPBXSync.IsZero() {
+		data["LastPBXSync"] = "mai"
+	} else {
+		data["LastPBXSync"] = lastPBXSync.Format("2006-01-02 15:04:05")
+	}
+	return data
+}
+
+// renderPBX re-renders solo il frammento (usato dopo save/sync via HTMX).
+func renderPBX(w http.ResponseWriter, r *http.Request) {
+	templates.ExecuteTemplate(w, "admin_pbx.html", pbxData(r))
+}
+
+// handleAdminPBX serve la pagina "Centralino" completa (navigazione diretta).
+func handleAdminPBX(w http.ResponseWriter, r *http.Request) {
+	locale := i18n.ResolveLocale(r)
+	data := pbxData(r)
+	data["Messages"] = i18n.GetMessages(locale)
+	templates.ExecuteTemplate(w, "admin_page_pbx.html", data)
+}
+
+// handleAdminSavePBXConfig salva url/utente/password/filtri del centralino.
+// La password inviata vuota lascia invariata quella già salvata (non viene
+// mai ri-mostrata in chiaro nel form). Le checkbox dei filtri non compaiono
+// nel form POST quando deselezionate (comportamento standard HTML) — la
+// loro assenza va quindi letta come "false", non come "campo mancante".
+func handleAdminSavePBXConfig(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form", http.StatusBadRequest)
+		return
+	}
+
+	if err := db.SetConfig(pbx.PBXURLConfigKey, strings.TrimSpace(r.FormValue("pbx_url"))); err != nil {
+		http.Error(w, "Failed to save PBX URL", http.StatusInternalServerError)
+		return
+	}
+	if err := db.SetConfig(pbx.PBXUserConfigKey, strings.TrimSpace(r.FormValue("pbx_user"))); err != nil {
+		http.Error(w, "Failed to save PBX user", http.StatusInternalServerError)
+		return
+	}
+	if newPass := r.FormValue("pbx_pass"); newPass != "" {
+		if err := db.SetConfig(pbx.PBXPassConfigKey, newPass); err != nil {
+			http.Error(w, "Failed to save PBX password", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	filters := pbx.Filters{
+		ExcludeUnnamed:        r.FormValue("exclude_unnamed") != "",
+		ExcludeInactiveGroups: r.FormValue("exclude_inactive_groups") != "",
+		ExcludeEmptyGroups:    r.FormValue("exclude_empty_groups") != "",
+	}
+	if err := pbx.SaveFilters(db, filters); err != nil {
+		http.Error(w, "Failed to save PBX filters", http.StatusInternalServerError)
+		return
+	}
+
+	renderPBX(w, r)
+}
+
+func handleAdminSyncPBX(w http.ResponseWriter, r *http.Request) {
+	if err := pbx.SyncPBX(db); err != nil {
+		log.Printf("[PBX] Manual sync failed: %v", err)
+	} else {
+		lastPBXSync = time.Now()
+		log.Printf("[PBX] Manual sync completed")
+	}
+	renderPBX(w, r)
 }
 
 // Helper function for vCard generation (reused from carddav package logic)

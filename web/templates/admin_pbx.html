@@ -1,0 +1,45 @@
+<div class="card">
+    <h3>Configurazione centralino</h3>
+    <form hx-post="/admin/pbx" hx-target="#pbx-content" hx-swap="innerHTML" style="display:flex;flex-direction:column;gap:10px;margin-top:10px;">
+        <div>
+            <div class="helptext" style="margin-bottom:4px;">URL centralino</div>
+            <input type="text" name="pbx_url" value="{{.PBXURL}}" placeholder="https://10.0.90.253" class="input" style="width:100%;">
+        </div>
+        <div>
+            <div class="helptext" style="margin-bottom:4px;">Utente</div>
+            <input type="text" name="pbx_user" value="{{.PBXUser}}" class="input" style="width:100%;">
+        </div>
+        <div>
+            <div class="helptext" style="margin-bottom:4px;">Password</div>
+            <input type="password" name="pbx_pass" value="" placeholder="{{if .PBXHasPassword}}(lasciare vuoto per non modificare){{else}}nessuna password salvata{{end}}" class="input" style="width:100%;">
+        </div>
+        <button type="submit" class="btn btn-primary" style="flex:none;align-self:flex-start;">{{index .Messages "save"}}</button>
+    </form>
+</div>
+
+<div class="card" style="margin-top:16px;">
+    <h3>Filtri di esclusione</h3>
+    <form hx-post="/admin/pbx" hx-target="#pbx-content" hx-swap="innerHTML" style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
+        <input type="hidden" name="pbx_url" value="{{.PBXURL}}">
+        <input type="hidden" name="pbx_user" value="{{.PBXUser}}">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;">
+            <input type="checkbox" name="exclude_unnamed" {{if .PBXExcludeUnnamed}}checked{{end}}>
+            Escludi contatti senza nome (es. interno mostrato come "&lt;534&gt;")
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;">
+            <input type="checkbox" name="exclude_inactive_groups" {{if .PBXExcludeInactiveGroups}}checked{{end}}>
+            Escludi gruppi di chiamata disattivi sul centralino
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;">
+            <input type="checkbox" name="exclude_empty_groups" {{if .PBXExcludeEmptyGroups}}checked{{end}}>
+            Escludi gruppi di chiamata senza destinatari
+        </label>
+        <button type="submit" class="btn btn-ghost" style="flex:none;align-self:flex-start;">{{index .Messages "save"}}</button>
+    </form>
+</div>
+
+<div class="card" style="margin-top:16px;">
+    <h3>Sincronizzazione</h3>
+    <div class="sync-time" style="font-size:15px;">Ultimo sync riuscito: {{.LastPBXSync}}</div>
+    <button hx-post="/admin/pbx/sync" hx-target="#pbx-content" hx-swap="innerHTML" class="btn btn-primary" style="flex:none;">Sincronizza ora</button>
+</div>
