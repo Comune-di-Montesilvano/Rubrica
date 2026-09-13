@@ -114,6 +114,20 @@ a { color: inherit; }
 }
 .rail-foot a { color: var(--danger); text-decoration: none; }
 
+.rail-meta { display: flex; align-items: center; gap: 8px; padding: 10px 20px; font-size: 11px; color: var(--muted); }
+.rail-status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); flex: 0 0 7px; }
+.rail-version { margin-left: auto; display: flex; align-items: center; gap: 4px; color: var(--muted); text-decoration: none; }
+.rail-version:hover { color: var(--ink); }
+
+.version-toast {
+    position: fixed; bottom: 20px; right: 20px; z-index: 999;
+    display: flex; align-items: center; gap: 14px; max-width: 380px;
+    background: var(--ink); color: var(--paper); padding: 14px 16px;
+    border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.25); font-size: 12.5px;
+}
+.version-toast strong { color: var(--accent); }
+.version-toast button { flex: 0 0 auto; background: var(--accent); color: var(--paper); border: none; border-radius: 6px; padding: 7px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+
 .main { flex: 1; padding: 26px 40px 60px; max-width: 860px; }
 
 .search {
@@ -276,6 +290,7 @@ td.num { font-variant-numeric: tabular-nums; font-weight: 600; }
     .rail-item { flex: 0 0 auto; padding: 6px 12px; border-left: none; border-bottom: 2px solid transparent; white-space: nowrap; }
     .rail-item.active { border-left: none; border-bottom-color: var(--accent); }
     .rail-foot { display: none; }
+    .rail-meta { display: none; }
     .main { padding: 18px 16px 40px; max-width: none; }
     .badge { width: 26px; height: 26px; flex: 0 0 26px; }
     .grid2 { grid-template-columns: 1fr; }

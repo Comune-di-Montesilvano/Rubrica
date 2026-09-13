@@ -14,12 +14,12 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
-	"github.com/mirkochipdotcom/ldavsync/internal/carddav"
-	"github.com/mirkochipdotcom/ldavsync/internal/config"
-	"github.com/mirkochipdotcom/ldavsync/internal/database"
-	"github.com/mirkochipdotcom/ldavsync/internal/i18n"
-	"github.com/mirkochipdotcom/ldavsync/internal/ldap"
-	"github.com/mirkochipdotcom/ldavsync/internal/phonebook"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/carddav"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/config"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/i18n"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/ldap"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/phonebook"
 )
 
 var (
@@ -33,7 +33,7 @@ var (
 )
 
 func main() {
-	log.Printf("[MAIN] Starting LdavSync %s", AppVersion)
+	log.Printf("[MAIN] Starting Rubrica %s", AppVersion)
 
 	// Load configuration
 	cfg = config.Load()
@@ -142,6 +142,7 @@ func main() {
 	r.HandleFunc("/contacts/{uid}", handleContactDetail).Methods("GET")
 	r.HandleFunc("/contacts/{uid}/export", handleExportVCard).Methods("GET")
 	r.HandleFunc("/health", handleHealth).Methods("GET")
+	r.HandleFunc("/version", handleVersion).Methods("GET")
 
 	// Auth routes
 	r.HandleFunc("/login", handleLogin).Methods("GET", "POST")
@@ -210,7 +211,7 @@ func ldapSyncWorker() {
 
 func requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		session, _ := store.Get(r, "ldavsync-session")
+		session, _ := store.Get(r, "rubrica-session")
 		if auth, ok := session.Values["authenticated"].(bool); !ok || !auth {
 			http.Redirect(w, r, "/login", http.StatusFound)
 			return
@@ -221,7 +222,7 @@ func requireAuth(next http.Handler) http.Handler {
 
 func requireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		session, _ := store.Get(r, "ldavsync-session")
+		session, _ := store.Get(r, "rubrica-session")
 		if admin, ok := session.Values["admin"].(bool); !ok || !admin {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
@@ -236,7 +237,7 @@ func requireAdmin(next http.Handler) http.Handler {
 // logged-in admin sees the "Gestione" section and "Esci" everywhere, a
 // visitor sees only "Pannello Admin".
 func sessionAdminUsername(r *http.Request) string {
-	session, _ := store.Get(r, "ldavsync-session")
+	session, _ := store.Get(r, "rubrica-session")
 	auth, _ := session.Values["authenticated"].(bool)
 	admin, _ := session.Values["admin"].(bool)
 	if !auth || !admin {
@@ -270,6 +271,7 @@ func railData() map[string]interface{} {
 		"AreaCounts": counts,
 		"Total":      total,
 		"Areas":      areas,
+		"AppVersion": AppVersion,
 	}
 }
 
@@ -428,6 +430,14 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(status)
 }
 
+// handleVersion serve la versione corrente in esecuzione — usato dal poll
+// lato client (rail.html) per accorgersi che il container è stato
+// aggiornato e proporre un reload, senza dover controllare manualmente.
+func handleVersion(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"version": AppVersion})
+}
+
 // Auth handlers
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -467,7 +477,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, _ := store.Get(r, "ldavsync-session")
+	session, _ := store.Get(r, "rubrica-session")
 	session.Values["authenticated"] = true
 	session.Values["admin"] = isAdmin
 	session.Values["username"] = username
@@ -477,7 +487,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
-	session, _ := store.Get(r, "ldavsync-session")
+	session, _ := store.Get(r, "rubrica-session")
 	session.Values["authenticated"] = false
 	session.Values["admin"] = false
 	session.Save(r, w)

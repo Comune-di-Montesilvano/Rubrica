@@ -1,4 +1,4 @@
-module github.com/mirkochipdotcom/ldavsync
+module github.com/Comune-di-Montesilvano/Rubrica
 
 go 1.25.0
 
