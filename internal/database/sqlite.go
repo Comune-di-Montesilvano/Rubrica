@@ -46,12 +46,14 @@ type Area struct {
 }
 
 type GroupNumber struct {
-	ID          int64
-	Number      string
-	Name        string
-	Description string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID           int64
+	Number       string
+	Name         string
+	Description  string
+	Source       string // "manual" (default) o "pbx"
+	NameOverride bool   // se true, il sync PBX non sovrascrive più Name
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 type GroupMember struct {
@@ -165,6 +167,8 @@ func (db *DB) migrate() error {
 		"ALTER TABLE contacts ADD COLUMN description TEXT",
 		"ALTER TABLE contacts ADD COLUMN area TEXT",
 		"ALTER TABLE contacts ADD COLUMN source TEXT DEFAULT 'ldap'",
+		"ALTER TABLE group_numbers ADD COLUMN source TEXT DEFAULT 'manual'",
+		"ALTER TABLE group_numbers ADD COLUMN name_override INTEGER DEFAULT 0",
 	}
 
 	for _, stmt := range alterStatements {
@@ -429,6 +433,98 @@ func (db *DB) SoftDeleteStale(syncTime time.Time) (int64, error) {
 	return result.RowsAffected()
 }
 
+// PBX operations (source='pbx': peers SIP del centralino non presenti nel
+// dominio LDAP — vedi internal/pbx per l'orchestrazione del sync)
+
+// ListDomainExtensions returns the ldap_ext of every active source='ldap'
+// contact — usato dal sync PBX per escludere i peers già coperti da LDAP.
+func (db *DB) ListDomainExtensions() ([]string, error) {
+	rows, err := db.Query(`SELECT ldap_ext FROM contacts WHERE source = 'ldap' AND ldap_ext IS NOT NULL AND ldap_ext != ''`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list domain extensions: %w", err)
+	}
+	defer rows.Close()
+
+	var exts []string
+	for rows.Next() {
+		var ext string
+		if err := rows.Scan(&ext); err != nil {
+			return nil, fmt.Errorf("failed to scan extension: %w", err)
+		}
+		exts = append(exts, ext)
+	}
+	return exts, rows.Err()
+}
+
+// GetContactByExtension returns the first active contact (qualunque
+// source) con il ldap_ext dato — usato per risolvere i membri "SIP/xxx"
+// di un call group PBX a un contact_id.
+func (db *DB) GetContactByExtension(ext string) (*Contact, error) {
+	query := `
+	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, manual_override, deleted_at, last_sync, created_at, updated_at
+	FROM contacts
+	WHERE ldap_ext = ? AND deleted_at IS NULL
+	LIMIT 1
+	`
+	contact := &Contact{}
+	err := db.QueryRow(query, ext).Scan(&contact.ID, &contact.UID, &contact.DisplayName, &contact.Email,
+		&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.ManualOverride,
+		&contact.DeletedAt, &contact.LastSync, &contact.CreatedAt, &contact.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get contact by extension: %w", err)
+	}
+	return contact, nil
+}
+
+// UpsertPBXContact crea o aggiorna un contatto source='pbx' (peer SIP del
+// centralino non presente in dominio). Stesso pattern CASE-gated da
+// manual_override di UpsertContact, ma imposta esplicitamente source='pbx'
+// alla creazione (mai toccato in seguito, anche in ON CONFLICT).
+func (db *DB) UpsertPBXContact(c *Contact) error {
+	now := time.Now()
+	c.UpdatedAt = now
+	if c.CreatedAt.IsZero() {
+		c.CreatedAt = now
+	}
+
+	query := `
+	INSERT INTO contacts (uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, manual_override, deleted_at, last_sync, created_at, updated_at)
+	VALUES (?, ?, '', ?, ?, ?, '', '', '', '', ?, 'pbx', ?, NULL, ?, ?, ?)
+	ON CONFLICT(uid) DO UPDATE SET
+		display_name = CASE WHEN manual_override = 0 THEN excluded.display_name ELSE display_name END,
+		ldap_ext = CASE WHEN manual_override = 0 THEN excluded.ldap_ext ELSE ldap_ext END,
+		primary_number = CASE WHEN manual_override = 0 THEN excluded.primary_number ELSE primary_number END,
+		department = CASE WHEN manual_override = 0 THEN excluded.department ELSE department END,
+		deleted_at = NULL,
+		last_sync = excluded.last_sync,
+		updated_at = excluded.updated_at
+	`
+	_, err := db.Exec(query, c.UID, c.DisplayName, c.LDAPExt, c.PrimaryNumber, c.Department, c.Area, c.ManualOverride, c.LastSync, c.CreatedAt, c.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("failed to upsert pbx contact: %w", err)
+	}
+	return nil
+}
+
+// SoftDeleteStalePBXContacts soft-delete i contatti source='pbx' il cui
+// last_sync non è stato aggiornato in questo giro (il peer non compare più
+// tra quelli del centralino, o è appena entrato in dominio LDAP e quindi
+// non è stato riscritto da UpsertPBXContact). Mai tocca source='ldap' o
+// source='manual'.
+func (db *DB) SoftDeleteStalePBXContacts(syncTime time.Time) (int64, error) {
+	result, err := db.Exec(
+		`UPDATE contacts SET deleted_at = ?, updated_at = ? WHERE deleted_at IS NULL AND source = 'pbx' AND last_sync < ?`,
+		syncTime, syncTime, syncTime,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to soft-delete stale pbx contacts: %w", err)
+	}
+	return result.RowsAffected()
+}
+
 // Manual contact operations (source='manual', contatti extra-dominio
 // creati da admin, mai toccati dal sync/reconciliation LDAP)
 
@@ -654,11 +750,14 @@ func (db *DB) CreateGroup(group *GroupNumber) error {
 	return nil
 }
 
+// UpdateGroup applica una modifica manuale (via admin UI) — imposta sempre
+// name_override=1, coerente con UpdateContactOverride su contacts: una
+// modifica esplicita fissa il nome, il sync PBX non lo sovrascrive più.
 func (db *DB) UpdateGroup(group *GroupNumber) error {
 	group.UpdatedAt = time.Now()
 	query := `
 	UPDATE group_numbers
-	SET number = ?, name = ?, description = ?, updated_at = ?
+	SET number = ?, name = ?, description = ?, name_override = 1, updated_at = ?
 	WHERE id = ?
 	`
 	_, err := db.Exec(query, group.Number, group.Name, group.Description, group.UpdatedAt, group.ID)
@@ -671,10 +770,10 @@ func (db *DB) DeleteGroup(id int64) error {
 }
 
 func (db *DB) GetGroup(id int64) (*GroupNumber, error) {
-	query := `SELECT id, number, name, description, created_at, updated_at FROM group_numbers WHERE id = ?`
+	query := `SELECT id, number, name, description, source, name_override, created_at, updated_at FROM group_numbers WHERE id = ?`
 	group := &GroupNumber{}
 	err := db.QueryRow(query, id).Scan(&group.ID, &group.Number, &group.Name, &group.Description,
-		&group.CreatedAt, &group.UpdatedAt)
+		&group.Source, &group.NameOverride, &group.CreatedAt, &group.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -685,7 +784,7 @@ func (db *DB) GetGroup(id int64) (*GroupNumber, error) {
 }
 
 func (db *DB) ListGroups() ([]*GroupNumber, error) {
-	query := `SELECT id, number, name, description, created_at, updated_at FROM group_numbers ORDER BY number`
+	query := `SELECT id, number, name, description, source, name_override, created_at, updated_at FROM group_numbers ORDER BY number`
 	rows, err := db.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list groups: %w", err)
@@ -696,13 +795,97 @@ func (db *DB) ListGroups() ([]*GroupNumber, error) {
 	for rows.Next() {
 		group := &GroupNumber{}
 		err := rows.Scan(&group.ID, &group.Number, &group.Name, &group.Description,
-			&group.CreatedAt, &group.UpdatedAt)
+			&group.Source, &group.NameOverride, &group.CreatedAt, &group.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan group: %w", err)
 		}
 		groups = append(groups, group)
 	}
 	return groups, nil
+}
+
+// GetGroupByNumber returns the group_numbers row for a given interno, o
+// nil se non esiste.
+func (db *DB) GetGroupByNumber(number string) (*GroupNumber, error) {
+	query := `SELECT id, number, name, description, source, name_override, created_at, updated_at FROM group_numbers WHERE number = ?`
+	group := &GroupNumber{}
+	err := db.QueryRow(query, number).Scan(&group.ID, &group.Number, &group.Name, &group.Description,
+		&group.Source, &group.NameOverride, &group.CreatedAt, &group.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get group by number: %w", err)
+	}
+	return group, nil
+}
+
+// ListGroupsBySource filtra group_numbers per source ("manual" o "pbx").
+func (db *DB) ListGroupsBySource(source string) ([]*GroupNumber, error) {
+	query := `SELECT id, number, name, description, source, name_override, created_at, updated_at FROM group_numbers WHERE source = ? ORDER BY number`
+	rows, err := db.Query(query, source)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list groups by source: %w", err)
+	}
+	defer rows.Close()
+
+	var groups []*GroupNumber
+	for rows.Next() {
+		group := &GroupNumber{}
+		if err := rows.Scan(&group.ID, &group.Number, &group.Name, &group.Description,
+			&group.Source, &group.NameOverride, &group.CreatedAt, &group.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan group: %w", err)
+		}
+		groups = append(groups, group)
+	}
+	return groups, nil
+}
+
+// UpsertPBXGroup crea o aggiorna una riga group_numbers con source='pbx'.
+// Il nome è sovrascritto dal centralino solo se name_override=0 sulla riga
+// già esistente (il valore di name_override passato qui conta solo alla
+// PRIMA creazione — vedi il caso di migrazione da gruppo manuale in
+// internal/pbx.ApplyCallGroups). Presuppone che un'eventuale riga
+// preesistente con lo stesso number sia già source='pbx' (il conflitto con
+// un gruppo manuale va risolto dal chiamante PRIMA di invocare questo
+// metodo, cancellando la riga manuale).
+func (db *DB) UpsertPBXGroup(number, name, description string, nameOverride bool) (*GroupNumber, error) {
+	now := time.Now()
+	query := `
+	INSERT INTO group_numbers (number, name, description, source, name_override, created_at, updated_at)
+	VALUES (?, ?, ?, 'pbx', ?, ?, ?)
+	ON CONFLICT(number) DO UPDATE SET
+		name = CASE WHEN name_override = 0 THEN excluded.name ELSE name END,
+		description = excluded.description,
+		source = 'pbx',
+		updated_at = excluded.updated_at
+	`
+	if _, err := db.Exec(query, number, name, description, nameOverride, now, now); err != nil {
+		return nil, fmt.Errorf("failed to upsert pbx group: %w", err)
+	}
+	return db.GetGroupByNumber(number)
+}
+
+// ReplaceGroupMembers sostituisce integralmente i membri di un gruppo in
+// una transazione: usato dal sync PBX, per cui il mapping peers<->gruppo è
+// fonte di verità assoluta lato centralino (mai un merge additivo).
+func (db *DB) ReplaceGroupMembers(groupID int64, contactIDs []int64) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM group_members WHERE group_id = ?`, groupID); err != nil {
+		return fmt.Errorf("failed to clear group members: %w", err)
+	}
+	now := time.Now()
+	for _, cid := range contactIDs {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO group_members (group_id, contact_id, created_at) VALUES (?, ?, ?)`, groupID, cid, now); err != nil {
+			return fmt.Errorf("failed to insert group member: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // Group member operations
