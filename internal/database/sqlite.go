@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ type Contact struct {
 	LDAPDN         string
 	Area           string
 	Source         string // "ldap" (sincronizzato, default) o "manual" (creato da admin)
+	Disabled       bool   // true = account AD disabilitato: mai in rubrica pubblica (zero value = false = attivo, così ogni altro punto che costruisce un Contact senza impostarlo resta corretto), solo per il matching nome centralino/dominio in /admin/pbx
 	ManualOverride bool
 	DeletedAt      *time.Time
 	LastSync       time.Time
@@ -167,6 +169,7 @@ func (db *DB) migrate() error {
 		"ALTER TABLE contacts ADD COLUMN description TEXT",
 		"ALTER TABLE contacts ADD COLUMN area TEXT",
 		"ALTER TABLE contacts ADD COLUMN source TEXT DEFAULT 'ldap'",
+		"ALTER TABLE contacts ADD COLUMN disabled INTEGER DEFAULT 0",
 		"ALTER TABLE group_numbers ADD COLUMN source TEXT DEFAULT 'manual'",
 		"ALTER TABLE group_numbers ADD COLUMN name_override INTEGER DEFAULT 0",
 	}
@@ -208,8 +211,8 @@ func (db *DB) UpsertContact(contact *Contact) error {
 	contact.UpdatedAt = now
 
 	query := `
-	INSERT INTO contacts (uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, manual_override, deleted_at, last_sync, created_at, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO contacts (uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, disabled, manual_override, deleted_at, last_sync, created_at, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(uid) DO UPDATE SET
 		display_name = CASE WHEN manual_override = 0 THEN excluded.display_name ELSE display_name END,
 		email = CASE WHEN manual_override = 0 THEN excluded.email ELSE email END,
@@ -221,6 +224,7 @@ func (db *DB) UpsertContact(contact *Contact) error {
 		ldap_groups = CASE WHEN manual_override = 0 THEN excluded.ldap_groups ELSE ldap_groups END,
 		ldap_dn = CASE WHEN manual_override = 0 THEN excluded.ldap_dn ELSE ldap_dn END,
 		area = CASE WHEN manual_override = 0 THEN excluded.area ELSE area END,
+		disabled = excluded.disabled,
 		deleted_at = NULL,
 		last_sync = excluded.last_sync,
 		updated_at = excluded.updated_at
@@ -231,7 +235,7 @@ func (db *DB) UpsertContact(contact *Contact) error {
 	}
 
 	result, err := db.Exec(query, contact.UID, contact.DisplayName, contact.Email, contact.LDAPExt,
-		contact.PrimaryNumber, contact.Department, contact.Title, contact.Description, contact.LDAPGroups, contact.LDAPDN, contact.Area, contact.ManualOverride, contact.DeletedAt,
+		contact.PrimaryNumber, contact.Department, contact.Title, contact.Description, contact.LDAPGroups, contact.LDAPDN, contact.Area, contact.Disabled, contact.ManualOverride, contact.DeletedAt,
 		contact.LastSync, contact.CreatedAt, contact.UpdatedAt)
 
 	if err != nil {
@@ -248,14 +252,14 @@ func (db *DB) UpsertContact(contact *Contact) error {
 
 func (db *DB) GetContact(uid string) (*Contact, error) {
 	query := `
-	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, manual_override, deleted_at, last_sync, created_at, updated_at
+	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, disabled, manual_override, deleted_at, last_sync, created_at, updated_at
 	FROM contacts
-	WHERE uid = ? AND deleted_at IS NULL
+	WHERE uid = ? AND deleted_at IS NULL AND disabled = 0
 	`
 
 	contact := &Contact{}
 	err := db.QueryRow(query, uid).Scan(&contact.ID, &contact.UID, &contact.DisplayName, &contact.Email,
-		&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.ManualOverride,
+		&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.Disabled, &contact.ManualOverride,
 		&contact.DeletedAt, &contact.LastSync, &contact.CreatedAt, &contact.UpdatedAt)
 
 	if err == sql.ErrNoRows {
@@ -270,9 +274,9 @@ func (db *DB) GetContact(uid string) (*Contact, error) {
 
 func (db *DB) SearchContacts(query string, limit int) ([]*Contact, error) {
 	searchQuery := `
-	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, manual_override, deleted_at, last_sync, created_at, updated_at
+	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, disabled, manual_override, deleted_at, last_sync, created_at, updated_at
 	FROM contacts
-	WHERE deleted_at IS NULL
+	WHERE deleted_at IS NULL AND disabled = 0
 	AND (email IS NOT NULL AND email != '' OR ldap_ext IS NOT NULL AND ldap_ext != '' OR primary_number IS NOT NULL AND primary_number != '')
 	AND (display_name LIKE ? OR email LIKE ? OR ldap_ext LIKE ? OR primary_number LIKE ? OR department LIKE ? OR description LIKE ?)
 	ORDER BY display_name
@@ -290,7 +294,7 @@ func (db *DB) SearchContacts(query string, limit int) ([]*Contact, error) {
 	for rows.Next() {
 		contact := &Contact{}
 		err := rows.Scan(&contact.ID, &contact.UID, &contact.DisplayName, &contact.Email,
-			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.ManualOverride,
+			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.Disabled, &contact.ManualOverride,
 			&contact.DeletedAt, &contact.LastSync, &contact.CreatedAt, &contact.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan contact: %w", err)
@@ -303,9 +307,9 @@ func (db *DB) SearchContacts(query string, limit int) ([]*Contact, error) {
 
 func (db *DB) ListContacts(limit, offset int) ([]*Contact, error) {
 	query := `
-	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, manual_override, deleted_at, last_sync, created_at, updated_at
+	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, disabled, manual_override, deleted_at, last_sync, created_at, updated_at
 	FROM contacts
-	WHERE deleted_at IS NULL
+	WHERE deleted_at IS NULL AND disabled = 0
 	AND (email IS NOT NULL AND email != '' OR ldap_ext IS NOT NULL AND ldap_ext != '' OR primary_number IS NOT NULL AND primary_number != '')
 	ORDER BY display_name
 	LIMIT ? OFFSET ?
@@ -321,7 +325,7 @@ func (db *DB) ListContacts(limit, offset int) ([]*Contact, error) {
 	for rows.Next() {
 		contact := &Contact{}
 		err := rows.Scan(&contact.ID, &contact.UID, &contact.DisplayName, &contact.Email,
-			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.ManualOverride,
+			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.Disabled, &contact.ManualOverride,
 			&contact.DeletedAt, &contact.LastSync, &contact.CreatedAt, &contact.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan contact: %w", err)
@@ -332,12 +336,14 @@ func (db *DB) ListContacts(limit, offset int) ([]*Contact, error) {
 	return contacts, nil
 }
 
-// ListAllContacts returns all contacts without filtering (for CardDAV)
+// ListAllContacts returns all contacts without altri filtri di ricerca
+// (per CardDAV) — esclude comunque i soft-deleted e i disabled (mai in
+// rubrica pubblica, CardDAV incluso).
 func (db *DB) ListAllContacts(limit, offset int) ([]*Contact, error) {
 	query := `
-	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, manual_override, deleted_at, last_sync, created_at, updated_at
+	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, disabled, manual_override, deleted_at, last_sync, created_at, updated_at
 	FROM contacts
-	WHERE deleted_at IS NULL
+	WHERE deleted_at IS NULL AND disabled = 0
 	ORDER BY display_name
 	LIMIT ? OFFSET ?
 	`
@@ -352,7 +358,7 @@ func (db *DB) ListAllContacts(limit, offset int) ([]*Contact, error) {
 	for rows.Next() {
 		contact := &Contact{}
 		err := rows.Scan(&contact.ID, &contact.UID, &contact.DisplayName, &contact.Email,
-			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.ManualOverride,
+			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.Disabled, &contact.ManualOverride,
 			&contact.DeletedAt, &contact.LastSync, &contact.CreatedAt, &contact.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan contact: %w", err)
@@ -392,7 +398,7 @@ func (db *DB) CountByArea() (map[string]int, error) {
 	query := `
 	SELECT COALESCE(area, '') AS area, COUNT(*)
 	FROM contacts
-	WHERE deleted_at IS NULL
+	WHERE deleted_at IS NULL AND disabled = 0
 	AND (email IS NOT NULL AND email != '' OR ldap_ext IS NOT NULL AND ldap_ext != '' OR primary_number IS NOT NULL AND primary_number != '')
 	GROUP BY area
 	`
@@ -436,8 +442,25 @@ func (db *DB) SoftDeleteStale(syncTime time.Time) (int64, error) {
 // PBX operations (source='pbx': peers SIP del centralino non presenti nel
 // dominio LDAP — vedi internal/pbx per l'orchestrazione del sync)
 
-// ListDomainExtensions returns the ldap_ext of every active source='ldap'
-// contact — usato dal sync PBX per escludere i peers già coperti da LDAP.
+// splitExtensions divide un valore ldap_ext su più interni separati da ";"
+// (es. "700;701", un contatto può avere più interni mappati in AD — vedi
+// una stessa persona), scartando token vuoti/spazi. Un valore con un solo
+// interno torna comunque uno slice di un elemento.
+func splitExtensions(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ";") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+// ListDomainExtensions returns the ldap_ext (ogni interno separatamente,
+// un contatto può averne più di uno separati da ";") di ogni contatto
+// source='ldap' attivo — usato dal sync PBX per escludere i peers già
+// coperti da LDAP.
 func (db *DB) ListDomainExtensions() ([]string, error) {
 	rows, err := db.Query(`SELECT ldap_ext FROM contacts WHERE source = 'ldap' AND ldap_ext IS NOT NULL AND ldap_ext != ''`)
 	if err != nil {
@@ -447,28 +470,31 @@ func (db *DB) ListDomainExtensions() ([]string, error) {
 
 	var exts []string
 	for rows.Next() {
-		var ext string
-		if err := rows.Scan(&ext); err != nil {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
 			return nil, fmt.Errorf("failed to scan extension: %w", err)
 		}
-		exts = append(exts, ext)
+		exts = append(exts, splitExtensions(raw)...)
 	}
 	return exts, rows.Err()
 }
 
 // GetContactByExtension returns the first active contact (qualunque
-// source) con il ldap_ext dato — usato per risolvere i membri "SIP/xxx"
-// di un call group PBX a un contact_id.
+// source) il cui ldap_ext contiene l'interno dato — usato per risolvere i
+// membri "SIP/xxx" di un call group PBX a un contact_id. Il confronto è
+// per token (";"-separati), non uguaglianza esatta: un contatto con più
+// interni ("700;701") deve risolvere su entrambi.
 func (db *DB) GetContactByExtension(ext string) (*Contact, error) {
 	query := `
-	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, manual_override, deleted_at, last_sync, created_at, updated_at
+	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, disabled, manual_override, deleted_at, last_sync, created_at, updated_at
 	FROM contacts
-	WHERE ldap_ext = ? AND deleted_at IS NULL
+	WHERE deleted_at IS NULL
+	AND (';' || ldap_ext || ';') LIKE ('%;' || ? || ';%')
 	LIMIT 1
 	`
 	contact := &Contact{}
 	err := db.QueryRow(query, ext).Scan(&contact.ID, &contact.UID, &contact.DisplayName, &contact.Email,
-		&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.ManualOverride,
+		&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.Disabled, &contact.ManualOverride,
 		&contact.DeletedAt, &contact.LastSync, &contact.CreatedAt, &contact.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -477,6 +503,43 @@ func (db *DB) GetContactByExtension(ext string) (*Contact, error) {
 		return nil, fmt.Errorf("failed to get contact by extension: %w", err)
 	}
 	return contact, nil
+}
+
+// ListContactsBySource elenca i contatti attivi di un dato source
+// ('ldap'/'pbx'/'manual'), in ordine alfabetico.
+func (db *DB) ListContactsBySource(source string) ([]*Contact, error) {
+	query := `
+	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, disabled, manual_override, deleted_at, last_sync, created_at, updated_at
+	FROM contacts
+	WHERE source = ? AND deleted_at IS NULL
+	ORDER BY display_name
+	`
+	rows, err := db.Query(query, source)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list contacts by source: %w", err)
+	}
+	defer rows.Close()
+
+	var contacts []*Contact
+	for rows.Next() {
+		contact := &Contact{}
+		if err := rows.Scan(&contact.ID, &contact.UID, &contact.DisplayName, &contact.Email,
+			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.Disabled, &contact.ManualOverride,
+			&contact.DeletedAt, &contact.LastSync, &contact.CreatedAt, &contact.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan contact: %w", err)
+		}
+		contacts = append(contacts, contact)
+	}
+	return contacts, rows.Err()
+}
+
+// ListPBXContacts elenca i contatti source='pbx' attivi (interni sul
+// centralino non coperti da nessun contatto source='ldap' con lo stesso
+// interno) — usato dall'utility admin che aiuta a scoprire nominativi
+// presenti sul centralino ma non ancora censiti nel dominio (es. un
+// dipendente con interno telefonico ma senza account AD/LDAP).
+func (db *DB) ListPBXContacts() ([]*Contact, error) {
+	return db.ListContactsBySource("pbx")
 }
 
 // UpsertPBXContact crea o aggiorna un contatto source='pbx' (peer SIP del
@@ -582,7 +645,7 @@ func (db *DB) DeleteManualContact(uid string) error {
 // ListManualContacts returns all source='manual' contacts, alphabetically.
 func (db *DB) ListManualContacts() ([]*Contact, error) {
 	query := `
-	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, manual_override, deleted_at, last_sync, created_at, updated_at
+	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, disabled, manual_override, deleted_at, last_sync, created_at, updated_at
 	FROM contacts
 	WHERE source = 'manual'
 	ORDER BY display_name
@@ -597,7 +660,7 @@ func (db *DB) ListManualContacts() ([]*Contact, error) {
 	for rows.Next() {
 		contact := &Contact{}
 		err := rows.Scan(&contact.ID, &contact.UID, &contact.DisplayName, &contact.Email,
-			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.ManualOverride,
+			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.Disabled, &contact.ManualOverride,
 			&contact.DeletedAt, &contact.LastSync, &contact.CreatedAt, &contact.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan contact: %w", err)
@@ -633,9 +696,9 @@ func (db *DB) ListDistinctLDAPDNs() ([]string, error) {
 // membro" del pannello admin, prima ancora di digitare una ricerca.
 func (db *DB) ListContactsWithNumber(limit int) ([]*Contact, error) {
 	query := `
-	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, manual_override, deleted_at, last_sync, created_at, updated_at
+	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, disabled, manual_override, deleted_at, last_sync, created_at, updated_at
 	FROM contacts
-	WHERE deleted_at IS NULL AND ((primary_number IS NOT NULL AND primary_number != '') OR (ldap_ext IS NOT NULL AND ldap_ext != ''))
+	WHERE deleted_at IS NULL AND disabled = 0 AND ((primary_number IS NOT NULL AND primary_number != '') OR (ldap_ext IS NOT NULL AND ldap_ext != ''))
 	ORDER BY display_name
 	LIMIT ?
 	`
@@ -650,7 +713,7 @@ func (db *DB) ListContactsWithNumber(limit int) ([]*Contact, error) {
 	for rows.Next() {
 		contact := &Contact{}
 		err := rows.Scan(&contact.ID, &contact.UID, &contact.DisplayName, &contact.Email,
-			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.ManualOverride,
+			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.Disabled, &contact.ManualOverride,
 			&contact.DeletedAt, &contact.LastSync, &contact.CreatedAt, &contact.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan contact: %w", err)
@@ -658,6 +721,73 @@ func (db *DB) ListContactsWithNumber(limit int) ([]*Contact, error) {
 		contacts = append(contacts, contact)
 	}
 	return contacts, nil
+}
+
+// ListActiveLDAPExtensionNames mappa ogni interno (ogni token ";"-separato
+// di ldap_ext) dei contatti source='ldap' attivi (non disabled, non
+// soft-deleted) al nome del contatto — usato per confrontare nome dominio
+// e nome centralino sullo stesso interno (segnalare disallineamenti).
+func (db *DB) ListActiveLDAPExtensionNames() (map[string]string, error) {
+	rows, err := db.Query(`SELECT display_name, ldap_ext FROM contacts WHERE source = 'ldap' AND deleted_at IS NULL AND disabled = 0 AND ldap_ext IS NOT NULL AND ldap_ext != ''`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list active ldap extension names: %w", err)
+	}
+	defer rows.Close()
+
+	names := make(map[string]string)
+	for rows.Next() {
+		var displayName, rawExt string
+		if err := rows.Scan(&displayName, &rawExt); err != nil {
+			return nil, fmt.Errorf("failed to scan extension name: %w", err)
+		}
+		for _, ext := range splitExtensions(rawExt) {
+			names[ext] = displayName
+		}
+	}
+	return names, rows.Err()
+}
+
+// DuplicateExtension segnala un interno condiviso da più contatti attivi
+// in dominio — probabile refuso in AD (stesso numero copiato su più
+// schede) da controllare a mano.
+type DuplicateExtension struct {
+	Extension string
+	Names     []string
+}
+
+// ListDuplicateExtensions trova gli interni (ogni token ";"-separato di
+// ldap_ext) condivisi da 2+ contatti source='ldap' attivi (non disabled,
+// non soft-deleted) — due persone abilitate non dovrebbero mai condividere
+// lo stesso interno.
+func (db *DB) ListDuplicateExtensions() ([]DuplicateExtension, error) {
+	rows, err := db.Query(`SELECT display_name, ldap_ext FROM contacts WHERE source = 'ldap' AND deleted_at IS NULL AND disabled = 0 AND ldap_ext IS NOT NULL AND ldap_ext != '' ORDER BY display_name`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list contacts for duplicate extension check: %w", err)
+	}
+	defer rows.Close()
+
+	byExt := make(map[string][]string)
+	for rows.Next() {
+		var displayName, rawExt string
+		if err := rows.Scan(&displayName, &rawExt); err != nil {
+			return nil, fmt.Errorf("failed to scan contact for duplicate check: %w", err)
+		}
+		for _, ext := range splitExtensions(rawExt) {
+			byExt[ext] = append(byExt[ext], displayName)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var dups []DuplicateExtension
+	for ext, names := range byExt {
+		if len(names) > 1 {
+			dups = append(dups, DuplicateExtension{Extension: ext, Names: names})
+		}
+	}
+	sort.Slice(dups, func(i, j int) bool { return dups[i].Extension < dups[j].Extension })
+	return dups, nil
 }
 
 // Area operations
@@ -904,7 +1034,7 @@ func (db *DB) RemoveGroupMember(groupID, contactID int64) error {
 
 func (db *DB) GetGroupMembers(groupID int64) ([]*Contact, error) {
 	query := `
-	SELECT c.id, c.uid, c.display_name, c.email, c.ldap_ext, c.primary_number, c.department, c.title, c.description, c.ldap_groups, c.ldap_dn, c.area, c.source,
+	SELECT c.id, c.uid, c.display_name, c.email, c.ldap_ext, c.primary_number, c.department, c.title, c.description, c.ldap_groups, c.ldap_dn, c.area, c.source, c.disabled,
 	       c.manual_override, c.deleted_at, c.last_sync, c.created_at, c.updated_at
 	FROM contacts c
 	INNER JOIN group_members gm ON c.id = gm.contact_id
@@ -922,7 +1052,7 @@ func (db *DB) GetGroupMembers(groupID int64) ([]*Contact, error) {
 	for rows.Next() {
 		contact := &Contact{}
 		err := rows.Scan(&contact.ID, &contact.UID, &contact.DisplayName, &contact.Email,
-			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.ManualOverride,
+			&contact.LDAPExt, &contact.PrimaryNumber, &contact.Department, &contact.Title, &contact.Description, &contact.LDAPGroups, &contact.LDAPDN, &contact.Area, &contact.Source, &contact.Disabled, &contact.ManualOverride,
 			&contact.DeletedAt, &contact.LastSync, &contact.CreatedAt, &contact.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan contact: %w", err)

@@ -146,23 +146,33 @@ func SyncContacts(db *database.DB, cfg *config.Config, onProgress func(done, tot
 			missingGroupInfo++
 		}
 
-		// Verifica se l'account è attivo (solo per AD)
+		// Verifica se l'account è attivo (solo per AD). A differenza del
+		// filtro sui gruppi, un account disabilitato NON viene scartato:
+		// viene salvato con disabled=true, mai in rubrica pubblica (tutte
+		// le query pubbliche filtrano disabled=0) ma comunque disponibile
+		// per il matching nome centralino/dominio nell'utility admin
+		// "numero mancante in AD" — un dipendente disattivato in AD ma
+		// ancora presente sul centralino deve poter comparire lì.
+		disabled := false
 		if cfg.LDAPOnlyActive {
 			uacStr := entry.GetAttributeValue("userAccountControl")
 			if uacStr != "" {
 				uac, err := strconv.ParseInt(uacStr, 10, 64)
-				if err == nil {
+				if err == nil && (uac&0x02) != 0 {
 					// Bit 2 (0x02) = ACCOUNTDISABLE
-					// Se il bit è impostato, l'account è disabilitato
-					if (uac & 0x02) != 0 {
-						filteredByDisabled++
-						continue
-					}
+					disabled = true
+					filteredByDisabled++
 				}
 			}
 		}
 
-		if !isEntryAllowedByGroups(entry, cfg.LDAPAllowedGroups) {
+		// Il filtro gruppi non si applica agli account disabilitati: quando
+		// un account viene disabilitato in AD è comune che venga anche
+		// rimosso da tutti i gruppi (memberOf svuotato), il che lo farebbe
+		// scartare qui prima ancora di poterlo salvare come disabled=true
+		// — sparendo del tutto invece di comparire nell'utility "numero
+		// mancante in AD" quando è ancora presente sul centralino.
+		if !disabled && !isEntryAllowedByGroups(entry, cfg.LDAPAllowedGroups) {
 			filteredByGroup++
 			continue
 		}
@@ -187,6 +197,12 @@ func SyncContacts(db *database.DB, cfg *config.Config, onProgress func(done, tot
 		}
 
 		email := entry.GetAttributeValue("mail")
+		// Un contatto può avere più interni mappati in AD su telephoneNumber
+		// separati da ";" (es. "700;701", stessa persona) — ldap_ext
+		// conserva il valore grezzo con tutti gli interni (per il matching
+		// PBX/call group, che deve riconoscere ognuno), mentre il numero
+		// primario cliccabile (tel:) usa solo il primo, un href non può
+		// contenere più numeri.
 		telephoneNumber := entry.GetAttributeValue("telephoneNumber")
 
 		department := entry.GetAttributeValue("physicalDeliveryOfficeName")
@@ -197,8 +213,8 @@ func SyncContacts(db *database.DB, cfg *config.Config, onProgress func(done, tot
 		title := entry.GetAttributeValue("title")
 		description := normalizeDescription(entry.GetAttributeValue("description"))
 
-		// Generate primary number from template
-		primaryNumber := generatePrimaryNumber(telephoneNumber, prefixTemplate)
+		// Generate primary number from template (solo il primo interno)
+		primaryNumber := generatePrimaryNumber(firstExtension(telephoneNumber), prefixTemplate)
 
 		// Extract LDAP groups (CN from memberOf)
 		var ldapGroups []string
@@ -221,6 +237,7 @@ func SyncContacts(db *database.DB, cfg *config.Config, onProgress func(done, tot
 			LDAPGroups:    ldapGroupsStr,
 			LDAPDN:        entry.DN,
 			Area:          deriveArea(entry.DN, areaMapping),
+			Disabled:      disabled,
 			LastSync:      syncTime,
 		}
 
@@ -247,7 +264,7 @@ func SyncContacts(db *database.DB, cfg *config.Config, onProgress func(done, tot
 	}
 
 	if cfg.LDAPOnlyActive {
-		log.Printf("[SYNC] Disabled accounts filtered: %d of %d total entries", filteredByDisabled, totalEntries)
+		log.Printf("[SYNC] Disabled accounts marked inactive (mai in rubrica pubblica): %d of %d total entries", filteredByDisabled, totalEntries)
 	}
 	if len(cfg.LDAPAllowedGroups) > 0 {
 		log.Printf("[SYNC] Group filter stats: total=%d filtered=%d missingMemberOf=%d allowedGroups=%v", totalEntries, filteredByGroup, missingGroupInfo, cfg.LDAPAllowedGroups)
@@ -256,17 +273,15 @@ func SyncContacts(db *database.DB, cfg *config.Config, onProgress func(done, tot
 	return nil
 }
 
+// buildSyncSearchFilter costruisce il filtro LDAP di ricerca. Non esclude
+// più gli account disabilitati lato server (LDAPOnlyActive li filtra a
+// valle, nel loop di SyncContacts, salvandoli con active=false invece di
+// scartarli): servono comunque per il matching nome centralino/dominio.
 func buildSyncSearchFilter(cfg *config.Config) string {
 	base := strings.TrimSpace(cfg.LDAPSearchFilter)
 	if base == "" {
 		base = "(objectClass=*)"
 	}
-
-	if cfg.LDAPOnlyActive {
-		// AD active users: disabled bit (2) must be unset in userAccountControl
-		base = "(&" + base + "(!(userAccountControl:1.2.840.113556.1.4.803:=2)))"
-	}
-
 	return base
 }
 
@@ -399,6 +414,32 @@ func topObservedGroups(stats map[string]int, limit int) []string {
 		out = append(out, fmt.Sprintf("%s(%d)", items[i].k, items[i].v))
 	}
 	return out
+}
+
+// SplitExtensions divide un valore telephoneNumber AD su più interni
+// separati da ";" (es. "700;701"), scartando token vuoti/spazi — un
+// contatto con un solo interno torna comunque uno slice di un elemento.
+// Esportata: usata anche da internal/database per il matching PBX.
+func SplitExtensions(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ";") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+// firstExtension torna il primo interno di un valore telephoneNumber
+// multi-valore (o l'unico, o "" se vuoto) — usato per il numero primario
+// cliccabile, che non può contenere più di un numero.
+func firstExtension(raw string) string {
+	exts := SplitExtensions(raw)
+	if len(exts) == 0 {
+		return ""
+	}
+	return exts[0]
 }
 
 // generatePrimaryNumber creates a full phone number from extension using the configured template

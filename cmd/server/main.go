@@ -33,6 +33,11 @@ var (
 	pbService   *phonebook.Service
 	lastSync    time.Time
 	lastPBXSync time.Time
+	// lastPBXNameMismatches sono gli interni dove nome centralino e nome
+	// dominio non concordano, calcolati dall'ultimo sync PBX riuscito (non
+	// esiste un modo economico per ricalcolarli senza interrogare di nuovo
+	// il centralino, quindi restano validi fino al prossimo sync).
+	lastPBXNameMismatches []pbx.NameMismatch
 )
 
 // syncStatus è lo stato di un sync manuale in corso, mostrato dalla UI
@@ -129,6 +134,12 @@ func main() {
 
 	// Load templates with custom functions
 	funcMap := template.FuncMap{
+		// extList: un contatto può avere più interni in AD separati da
+		// ";" (telephoneNumber multi-valore) — mostrati "700, 701" invece
+		// del ";" grezzo di storage.
+		"extList": func(s string) string {
+			return strings.ReplaceAll(s, ";", ", ")
+		},
 		"substr": func(s string, start, length int) string {
 			if start < 0 || start >= len(s) {
 				return ""
@@ -183,10 +194,11 @@ func main() {
 		} else {
 			lastSync = time.Now()
 		}
-		if err := pbx.SyncPBX(db, nil); err != nil {
+		if mismatches, err := pbx.SyncPBX(db, nil); err != nil {
 			log.Printf("[PBX] Initial sync failed: %v", err)
 		} else {
 			lastPBXSync = time.Now()
+			lastPBXNameMismatches = mismatches
 		}
 	}()
 
@@ -270,10 +282,11 @@ func ldapSyncWorker() {
 		} else {
 			lastSync = time.Now()
 		}
-		if err := pbx.SyncPBX(db, nil); err != nil {
+		if mismatches, err := pbx.SyncPBX(db, nil); err != nil {
 			log.Printf("[PBX] Failed: %v", err)
 		} else {
 			lastPBXSync = time.Now()
+			lastPBXNameMismatches = mismatches
 		}
 	}
 }
@@ -827,11 +840,17 @@ func handleAdminContactSearch(w http.ResponseWriter, r *http.Request) {
 	groupID := vars["id"]
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 
+	var contacts []*database.Contact
+	var err error
 	if query == "" {
-		return
+		// Campo svuotato (es. cancellato col backspace dopo una ricerca):
+		// tornare ai candidati di default invece di lasciare il div
+		// vuoto — altrimenti htmx ci scrive dentro una risposta vuota e
+		// la lista sparisce fino al reload della pagina.
+		contacts, err = db.ListContactsWithNumber(20)
+	} else {
+		contacts, err = db.SearchContacts(query, 8)
 	}
-
-	contacts, err := db.SearchContacts(query, 8)
 	if err != nil {
 		http.Error(w, "Search failed", http.StatusInternalServerError)
 		return
@@ -1293,7 +1312,88 @@ func pbxData(r *http.Request) map[string]interface{} {
 	} else {
 		data["LastPBXSync"] = lastPBXSync.Format("2006-01-02 15:04:05")
 	}
+	data["UnmappedContacts"] = pbxUnmappedContacts()
+	data["NameMismatches"] = lastPBXNameMismatches
+	if dups, err := db.ListDuplicateExtensions(); err != nil {
+		log.Printf("[ADMIN] Failed to list duplicate extensions: %v", err)
+	} else {
+		data["DuplicateExtensions"] = dups
+	}
 	return data
+}
+
+// pbxUnmappedRow è un interno del centralino senza corrispondenza per
+// numero in dominio, con un'eventuale corrispondenza per nome (nome
+// centralino "LIKE" nome dominio, ordine parole e spazi non contano) — un
+// dipendente può avere l'account AD/LDAP ma senza il telefono compilato:
+// in quel caso non manca dal dominio, manca solo il numero nella sua
+// scheda AD, e PossibleMatch lo segnala.
+type pbxUnmappedRow struct {
+	*database.Contact
+	PossibleMatch string
+}
+
+// nameWords normalizza un nome per il confronto fuzzy: maiuscolo, diviso
+// in parole, scartando token troppo corti (iniziali, articoli) per non
+// generare falsi positivi.
+func nameWords(name string) map[string]bool {
+	words := map[string]bool{}
+	for _, w := range strings.Fields(strings.ToUpper(name)) {
+		if len(w) >= 3 {
+			words[w] = true
+		}
+	}
+	return words
+}
+
+// pbxUnmappedContacts elenca i contatti source='pbx' e prova ad
+// abbinarli per nome (non per interno, già escluso a monte dal sync) a un
+// contatto source='ldap' esistente — "nome centralino LIKE nome dominio",
+// indipendente dall'ordine delle parole (es. "Cognome Nome" vs
+// "Nome Cognome").
+func pbxUnmappedContacts() []pbxUnmappedRow {
+	pbxContacts, err := db.ListPBXContacts()
+	if err != nil {
+		log.Printf("[ADMIN] Failed to list PBX contacts: %v", err)
+		return nil
+	}
+	ldapContacts, err := db.ListContactsBySource("ldap")
+	if err != nil {
+		log.Printf("[ADMIN] Failed to list LDAP contacts for name matching: %v", err)
+		ldapContacts = nil
+	}
+
+	rows := make([]pbxUnmappedRow, 0, len(pbxContacts))
+	for _, c := range pbxContacts {
+		row := pbxUnmappedRow{Contact: c}
+		pbxWords := nameWords(c.DisplayName)
+		if len(pbxWords) > 0 {
+			for _, l := range ldapContacts {
+				ldapWords := nameWords(l.DisplayName)
+				shorter := len(pbxWords)
+				if len(ldapWords) < shorter {
+					shorter = len(ldapWords)
+				}
+				if shorter == 0 {
+					continue
+				}
+				matched := 0
+				for w := range pbxWords {
+					if ldapWords[w] {
+						matched++
+					}
+				}
+				if matched >= shorter {
+					row.PossibleMatch = l.DisplayName
+					break
+				}
+			}
+		}
+		if row.PossibleMatch != "" {
+			rows = append(rows, row)
+		}
+	}
+	return rows
 }
 
 // renderPBX re-renders solo il frammento (usato dopo save/sync via HTMX).
@@ -1354,11 +1454,12 @@ func handleAdminSavePBXConfig(w http.ResponseWriter, r *http.Request) {
 func handleAdminSyncPBX(w http.ResponseWriter, r *http.Request) {
 	pbxManualSync.start()
 	go func() {
-		err := pbx.SyncPBX(db, pbxManualSync.setPhase)
+		mismatches, err := pbx.SyncPBX(db, pbxManualSync.setPhase)
 		if err != nil {
 			log.Printf("[PBX] Manual sync failed: %v", err)
 		} else {
 			lastPBXSync = time.Now()
+			lastPBXNameMismatches = mismatches
 			log.Printf("[PBX] Manual sync completed")
 		}
 		pbxManualSync.finish(err)

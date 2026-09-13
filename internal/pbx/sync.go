@@ -3,7 +3,6 @@ package pbx
 import (
 	"fmt"
 	"log"
-	"regexp"
 	"strings"
 	"time"
 
@@ -80,12 +79,17 @@ func SaveFilters(db *database.DB, f Filters) error {
 	return setBoolConfig(db, filterExcludeEmptyGroupsConfigKey, f.ExcludeEmptyGroups)
 }
 
-// placeholderNameRe riconosce i nomi "segnaposto" che il centralino usa per
-// gli interni senza un nome configurato, es. " <521>" o "<534>".
-var placeholderNameRe = regexp.MustCompile(`^<\d+>$`)
-
-func isPlaceholderName(callerID string) bool {
-	return placeholderNameRe.MatchString(strings.TrimSpace(callerID))
+// isPlaceholderName riconosce i nomi "segnaposto" che il centralino usa per
+// gli interni senza un nome configurato. Sul dispositivo reale non è un
+// bare "<534>" isolato come ipotizzato inizialmente, ma l'interno tra
+// parentesi angolari ovunque nella stringa — es. "Interno <592>",
+// "700 <700>", "prova<853>" — quindi il confronto è "contiene <extension>",
+// non un match esatto sull'intera stringa.
+func isPlaceholderName(callerID, extension string) bool {
+	if extension == "" {
+		return false
+	}
+	return strings.Contains(callerID, "<"+extension+">")
 }
 
 // FilterPeers applica Filters.ExcludeUnnamed alla lista di peer.
@@ -95,7 +99,7 @@ func FilterPeers(peers []Peer, f Filters) []Peer {
 	}
 	var out []Peer
 	for _, p := range peers {
-		if isPlaceholderName(p.CallerID) {
+		if isPlaceholderName(p.CallerID, p.Extension) {
 			continue
 		}
 		out = append(out, p)
@@ -119,6 +123,74 @@ func FilterCallGroups(groups []CallGroup, f Filters) []CallGroup {
 	return out
 }
 
+// NameMismatch segnala un interno dove PBX e dominio non concordano sul
+// nome della persona pur condividendo lo stesso interno — es. numero
+// riassegnato senza aggiornare uno dei due sistemi, o refuso in uno dei
+// due. Diverso dall'utility "numero mancante in AD": lì l'interno manca
+// SOLO da un lato, qui è presente su entrambi ma con nomi incompatibili.
+type NameMismatch struct {
+	Extension  string
+	DomainName string
+	PBXName    string
+}
+
+// nameWords normalizza un nome per il confronto: maiuscolo, diviso in
+// parole, scartando token troppo corti (iniziali, articoli) per non
+// generare falsi positivi.
+func nameWords(name string) map[string]bool {
+	words := map[string]bool{}
+	for _, w := range strings.Fields(strings.ToUpper(name)) {
+		if len(w) >= 3 {
+			words[w] = true
+		}
+	}
+	return words
+}
+
+// namesLookAlike è vero se i due nomi condividono almeno una parola
+// significativa (ordine libero) — o se uno dei due non ha parole
+// abbastanza lunghe da giudicare, nel qual caso non si segnala nulla
+// piuttosto che generare un falso positivo.
+func namesLookAlike(a, b string) bool {
+	wa, wb := nameWords(a), nameWords(b)
+	if len(wa) == 0 || len(wb) == 0 {
+		return true
+	}
+	for w := range wa {
+		if wb[w] {
+			return true
+		}
+	}
+	return false
+}
+
+// FindNameMismatches confronta ogni peer del centralino con l'omonimo
+// interno di dominio (quando esiste) e segnala quelli il cui nome non ha
+// nessuna parola in comune — va chiamato PRIMA di ApplyPeers, che scarta
+// silenziosamente i peer già coperti da un interno di dominio: sono
+// esattamente i candidati a questo controllo.
+func FindNameMismatches(db *database.DB, peers []Peer) ([]NameMismatch, error) {
+	domainNames, err := db.ListActiveLDAPExtensionNames()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list domain extension names: %w", err)
+	}
+	var mismatches []NameMismatch
+	for _, p := range peers {
+		domainName, ok := domainNames[p.Extension]
+		if !ok || p.CallerID == "" {
+			continue
+		}
+		if !namesLookAlike(domainName, p.CallerID) {
+			mismatches = append(mismatches, NameMismatch{
+				Extension:  p.Extension,
+				DomainName: domainName,
+				PBXName:    p.CallerID,
+			})
+		}
+	}
+	return mismatches, nil
+}
+
 // SyncPBX esegue un giro completo di sync (login, fetch, filtra, applica).
 // No-op silenzioso se l'URL non è ancora configurato da /admin/pbx —
 // subsystem disattivo. Un errore di rete/login/parsing salta l'intero giro
@@ -128,13 +200,13 @@ func FilterCallGroups(groups []CallGroup, f Filters) []CallGroup {
 // ma un giro può comunque richiedere secondi se il centralino è lento a
 // rispondere: onPhase dà alla UI qualcosa da mostrare invece di un bottone
 // "appeso" senza feedback.
-func SyncPBX(db *database.DB, onPhase func(phase string)) error {
+func SyncPBX(db *database.DB, onPhase func(phase string)) ([]NameMismatch, error) {
 	if onPhase == nil {
 		onPhase = func(phase string) {}
 	}
 	url, user, pass := LoadPBXConfig(db)
 	if url == "" {
-		return nil
+		return nil, nil
 	}
 
 	log.Printf("[PBX] Starting PBX sync...")
@@ -142,37 +214,48 @@ func SyncPBX(db *database.DB, onPhase func(phase string)) error {
 	onPhase("Accesso al centralino...")
 	client := NewClient(url)
 	if err := client.Login(user, pass); err != nil {
-		return fmt.Errorf("pbx login failed: %w", err)
+		return nil, fmt.Errorf("pbx login failed: %w", err)
 	}
 
 	onPhase("Recupero interni...")
 	peers, err := client.FetchPeers()
 	if err != nil {
-		return fmt.Errorf("pbx fetch peers failed: %w", err)
+		return nil, fmt.Errorf("pbx fetch peers failed: %w", err)
 	}
 
 	onPhase("Recupero gruppi di chiamata...")
 	groups, err := client.FetchCallGroups()
 	if err != nil {
-		return fmt.Errorf("pbx fetch call groups failed: %w", err)
+		return nil, fmt.Errorf("pbx fetch call groups failed: %w", err)
 	}
 
 	filters := LoadFilters(db)
 	peers = FilterPeers(peers, filters)
 	groups = FilterCallGroups(groups, filters)
 
+	// Il confronto nome PBX/dominio va fatto sui peer ancora "grezzi" (già
+	// filtrati dai placeholder, ma prima di ApplyPeers): ApplyPeers scarta
+	// silenziosamente qualunque peer il cui interno è già coperto da un
+	// contatto di dominio, che è esattamente l'insieme su cui ha senso
+	// controllare se i due nomi coincidono.
+	mismatches, err := FindNameMismatches(db, peers)
+	if err != nil {
+		log.Printf("[PBX] Failed to compute name mismatches: %v", err)
+		mismatches = nil
+	}
+
 	onPhase("Applicazione dati...")
 	applied, err := ApplyPeers(db, peers, time.Now())
 	if err != nil {
-		return fmt.Errorf("pbx apply peers failed: %w", err)
+		return mismatches, fmt.Errorf("pbx apply peers failed: %w", err)
 	}
 
 	if err := ApplyCallGroups(db, groups); err != nil {
-		return fmt.Errorf("pbx apply call groups failed: %w", err)
+		return mismatches, fmt.Errorf("pbx apply call groups failed: %w", err)
 	}
 
-	log.Printf("[PBX] Sync completed: %d peers applied, %d call groups", applied, len(groups))
-	return nil
+	log.Printf("[PBX] Sync completed: %d peers applied, %d call groups, %d name mismatches", applied, len(groups), len(mismatches))
+	return mismatches, nil
 }
 
 // ApplyPeers upserta come contacts source='pbx' i peer non già coperti da

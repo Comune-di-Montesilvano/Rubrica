@@ -86,13 +86,18 @@ func (c *Client) Login(user, pass string) error {
 	return nil
 }
 
-func (c *Client) get(path string) (string, error) {
+// get esegue una GET con lo specifico Referer richiesto dal centralino: i
+// moduli interni (monitor/peers, extensions/callgroups) rispondono con un
+// bounce ("window.open('vivo.php', '_top')", niente contenuto) se il
+// Referer non è quello della pagina "_view" che li precede nel frameset
+// reale — vedi getWithLanding.
+func (c *Client) get(path, referer string) (string, error) {
 	req, err := http.NewRequest(http.MethodGet, c.baseURL+"/"+path, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0")
-	req.Header.Set("Referer", c.baseURL+"/vivo.php")
+	req.Header.Set("Referer", referer)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -106,11 +111,29 @@ func (c *Client) get(path string) (string, error) {
 	return string(body), err
 }
 
+// getWithLanding replica la navigazione reale del frameset: il contenuto di
+// un modulo (es. "monitor&mode=peers") è servito solo con Referer uguale
+// alla pagina "landing" che lo precede nella UI (es.
+// "sip&mode=peers_view") — colpire il modulo direttamente con Referer
+// vivo.php dà solo un bounce vuoto ("window.open('vivo.php','_top')"),
+// nonostante la sessione sia valida. landingPath va quindi visitato prima,
+// scartandone il contenuto (serve solo a fissare lo stato lato server /
+// fornire il Referer corretto).
+func (c *Client) getWithLanding(landingPath, modulePath string) (string, error) {
+	if _, err := c.get(landingPath, c.baseURL+"/vivo.php"); err != nil {
+		return "", fmt.Errorf("landing page %s failed: %w", landingPath, err)
+	}
+	return c.get(modulePath, c.baseURL+"/"+landingPath)
+}
+
 var infopeersRe = regexp.MustCompile(`var infopeers\s*=\s*(\[.*?\]);`)
 
 // FetchPeers scarica e parsa lo stato dei peers SIP.
 func (c *Client) FetchPeers() ([]Peer, error) {
-	html, err := c.get("vivo.index.php?module=monitor&mode=peers")
+	html, err := c.getWithLanding(
+		"vivo.index.php?module=sip&mode=peers_view",
+		"vivo.index.php?module=monitor&mode=peers&hidetitle=yes",
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +156,10 @@ func ParsePeers(html string) ([]Peer, error) {
 
 // FetchCallGroups scarica e parsa la tabella dei call group.
 func (c *Client) FetchCallGroups() ([]CallGroup, error) {
-	html, err := c.get("vivo.index.php?module=extensions&mode=callgroups")
+	html, err := c.getWithLanding(
+		"vivo.index.php?module=extensions&mode=callgroups_view",
+		"vivo.index.php?module=extensions&mode=callgroups&hidetitle=yes",
+	)
 	if err != nil {
 		return nil, err
 	}

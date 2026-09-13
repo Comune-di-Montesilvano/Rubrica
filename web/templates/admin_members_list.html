@@ -1,5 +1,6 @@
 <div id="members-list">
     {{if .Members}}
+    <div class="modal-scroll-x">
     <table>
         <thead>
             <tr>
@@ -13,8 +14,8 @@
             {{range .Members}}
             <tr>
                 <td>{{.DisplayName}}</td>
-                <td class="member-count">{{.Email}}</td>
-                <td class="member-count">{{.PrimaryNumber}}</td>
+                <td class="member-count" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{.Email}}</td>
+                <td class="member-count">{{if .LDAPExt}}int. {{extList .LDAPExt}}{{else if .PrimaryNumber}}{{.PrimaryNumber}}{{else}}&mdash;{{end}}</td>
                 <td>
                     <button hx-post="/admin/groups/{{$.GroupID}}/members/{{.ID}}/delete"
                             hx-target="#members-list" hx-swap="outerHTML" class="btn-danger">
@@ -25,6 +26,7 @@
             {{end}}
         </tbody>
     </table>
+    </div>
     {{else}}
     <p class="helptext" style="text-align:center;padding:16px 0;">Nessun membro</p>
     {{end}}
