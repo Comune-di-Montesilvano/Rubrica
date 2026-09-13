@@ -3,7 +3,7 @@ package phonebook
 import (
 	"sort"
 
-	"github.com/mirkochipdotcom/ldavsync/internal/database"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
 )
 
 // ContactWithGroups represents a contact with its associated groups

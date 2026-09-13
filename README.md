@@ -1,8 +1,8 @@
 # Rubrica
 
-[![Go Version](https://img.shields.io/github/go-mod/go-version/mirkochipdotcom/ldavsync)](https://go.dev/)
-[![License](https://img.shields.io/github/license/mirkochipdotcom/ldavsync)](LICENSE)
-[![Docker](https://img.shields.io/badge/docker-ready-blue)](https://github.com/mirkochipdotcom/ldavsync/pkgs/container/ldavsync)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/Comune-di-Montesilvano/Rubrica)](https://go.dev/)
+[![License](https://img.shields.io/github/license/Comune-di-Montesilvano/Rubrica)](LICENSE)
+[![Docker](https://img.shields.io/badge/docker-ready-blue)](https://github.com/Comune-di-Montesilvano/Rubrica/pkgs/container/rubrica)
 
 > Rubrica aziendale con sincronizzazione automatica da LDAP/Active Directory, numeri di gruppo centralizzati (centralino) e supporto CardDAV per Thunderbird, iOS e Android.
 
@@ -22,8 +22,8 @@ Applicazione costruita su misura per l'anagrafica e l'infrastruttura AD di un en
 ## Avvio rapido
 
 ```bash
-git clone https://github.com/mirkochipdotcom/ldavsync.git
-cd ldavsync
+git clone https://github.com/Comune-di-Montesilvano/Rubrica.git
+cd Rubrica
 
 cp .env.example .env
 nano .env  # imposta i parametri LDAP

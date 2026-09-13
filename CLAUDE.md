@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**Rubrica** (module `github.com/mirkochipdotcom/ldavsync` — historically "gorubrica" → "LdavSync" → "Rubrica"; the module path/repo location hasn't followed the latest rename yet, see note below): a corporate directory app, purpose-built for a specific municipality's AD/PBX (not designed for reuse elsewhere), that syncs contacts hourly from LDAP/AD, stores them in embedded SQLite, serves a search UI (HTMX), and exposes a CardDAV server for Thunderbird/iOS/Android address book clients.
+**Rubrica** (module `github.com/Comune-di-Montesilvano/Rubrica` — historically "gorubrica" → "LdavSync" → "Rubrica", repo transferred from `mirkochipdotcom/LdavSync`): a corporate directory app, purpose-built for a specific municipality's AD/PBX (not designed for reuse elsewhere), that syncs contacts hourly from LDAP/AD, stores them in embedded SQLite, serves a search UI (HTMX), and exposes a CardDAV server for Thunderbird/iOS/Android address book clients.
 
-**Naming note**: the display name is "Rubrica" (UI, CardDAV realm, log lines), but the Go module path, Docker image name (`ghcr.io/mirkochipdotcom/ldavsync`), and container/binary name are still `ldavsync` — those are tied to the current GitHub repo location and are meant to be updated together in the same pass as an eventual repo transfer/rename, not piecemeal.
+Docker image: `ghcr.io/comune-di-montesilvano/rubrica` (lowercase — GHCR/OCI require lowercase image names, unlike the GitHub org/repo name itself). Binary/container/system-user name: `rubrica`. Database file path is unchanged (`/data/ldavsync.db`, see `DATABASE_PATH` in `compose.yml`) — deliberately not renamed, to avoid touching the volume path of any already-running deployment.
 
 ## Commands
 
@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 go run cmd/server/main.go
 
 # Build (CGO required — go-sqlite3 is a cgo driver)
-CGO_ENABLED=1 go build -o ldavsync ./cmd/server
+CGO_ENABLED=1 go build -o rubrica ./cmd/server
 
 # Tests
 go test ./...
@@ -24,7 +24,7 @@ go test -run TestName ./internal/... # single test
 go vet ./...
 
 # Docker
-docker build --build-arg VERSION=0.1.0 -t ldavsync:0.1.0 .
+docker build --build-arg VERSION=0.1.0 -t rubrica:0.1.0 .
 docker compose up -d --build   # rebuild + redeploy against real LDAP for end-to-end checks
 ```
 

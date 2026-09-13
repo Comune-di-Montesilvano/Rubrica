@@ -29,8 +29,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mirkochipdotcom/ldavsync/internal/config"
-	"github.com/mirkochipdotcom/ldavsync/internal/database"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/config"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
 )
 
 // Peer rappresenta un interno SIP come esposto da

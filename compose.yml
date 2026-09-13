@@ -1,12 +1,12 @@
 services:
-  ldavsync:
-    image: ghcr.io/mirkochipdotcom/ldavsync:latest
+  rubrica:
+    image: ghcr.io/comune-di-montesilvano/rubrica:latest
     build:
       context: .
       dockerfile: Dockerfile
       args:
         VERSION: ${VERSION:-dev}
-    container_name: ldavsync
+    container_name: rubrica
     restart: unless-stopped
     ports:
       - "${SERVER_PORT:-8080}:${SERVER_PORT:-8080}"

@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/mirkochipdotcom/ldavsync/internal/config"
-	"github.com/mirkochipdotcom/ldavsync/internal/database"
-	"github.com/mirkochipdotcom/ldavsync/internal/ldap"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/config"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/ldap"
 )
 
 // Server handles CardDAV protocol requests

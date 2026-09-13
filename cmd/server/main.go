@@ -14,12 +14,12 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
-	"github.com/mirkochipdotcom/ldavsync/internal/carddav"
-	"github.com/mirkochipdotcom/ldavsync/internal/config"
-	"github.com/mirkochipdotcom/ldavsync/internal/database"
-	"github.com/mirkochipdotcom/ldavsync/internal/i18n"
-	"github.com/mirkochipdotcom/ldavsync/internal/ldap"
-	"github.com/mirkochipdotcom/ldavsync/internal/phonebook"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/carddav"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/config"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/i18n"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/ldap"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/phonebook"
 )
 
 var (
