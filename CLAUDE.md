@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Rubrica** (module `github.com/Comune-di-Montesilvano/Rubrica` — historically "gorubrica" → "LdavSync" → "Rubrica", repo transferred from `mirkochipdotcom/LdavSync`): a corporate directory app, purpose-built for a specific municipality's AD/PBX (not designed for reuse elsewhere), that syncs contacts hourly from LDAP/AD, stores them in embedded SQLite, serves a search UI (HTMX), and exposes a CardDAV server for Thunderbird/iOS/Android address book clients.
 
-Docker image: `ghcr.io/comune-di-montesilvano/rubrica` (lowercase — GHCR/OCI require lowercase image names, unlike the GitHub org/repo name itself). Binary/container/system-user name: `rubrica`. Database file path is unchanged (`/data/ldavsync.db`, see `DATABASE_PATH` in `compose.yml`) — deliberately not renamed, to avoid touching the volume path of any already-running deployment.
+Docker image: `ghcr.io/comune-di-montesilvano/rubrica` (lowercase — GHCR/OCI require lowercase image names, unlike the GitHub org/repo name itself). Binary/container/system-user name: `rubrica`. Database file path is unchanged (`/data/ldavsync.db`, see `DATABASE_PATH` in `docker-compose.yml`) — deliberately not renamed, to avoid touching the volume path of any already-running deployment. **File is named `docker-compose.yml`, not `compose.yml`** — the Portainer git-stack deploy expects that exact filename and fails with "no such file or directory" otherwise.
 
 ## Commands
 
