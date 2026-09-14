@@ -12,10 +12,25 @@ services:
       - "${SERVER_PORT:-8080}:${SERVER_PORT:-8080}"
     volumes:
       - ./data:/data
-    env_file:
-      - .env
     environment:
+      - SERVER_HOST=${SERVER_HOST:-0.0.0.0}
+      - SERVER_PORT=${SERVER_PORT:-8080}
+      - LDAP_HOST=${LDAP_HOST}
+      - LDAP_BASE_DN=${LDAP_BASE_DN}
+      - LDAP_USER_DN_TEMPLATE=${LDAP_USER_DN_TEMPLATE}
+      - LDAP_BIND_DN=${LDAP_BIND_DN}
+      - LDAP_BIND_PASSWORD=${LDAP_BIND_PASSWORD}
+      - LDAP_START_TLS=${LDAP_START_TLS:-true}
+      - LDAP_TLS_SKIP_VERIFY=${LDAP_TLS_SKIP_VERIFY:-false}
+      - LDAP_ADMIN_GROUP=${LDAP_ADMIN_GROUP}
+      - LDAP_SEARCH_FILTER=${LDAP_SEARCH_FILTER}
+      - LDAP_ONLY_ACTIVE=${LDAP_ONLY_ACTIVE:-true}
+      - LDAP_ALLOWED_GROUPS=${LDAP_ALLOWED_GROUPS}
+      - ADMIN_USERS=${ADMIN_USERS}
+      - SYNC_INTERVAL_HOURS=${SYNC_INTERVAL_HOURS:-1}
       - DATABASE_PATH=/data/ldavsync.db
+      - SESSION_SECRET=${SESSION_SECRET}
+      - PRIMARY_NUMBER_PREFIX_TEMPLATE=${PRIMARY_NUMBER_PREFIX_TEMPLATE}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:${SERVER_PORT:-8080}/health"]
       interval: 30s
