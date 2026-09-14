@@ -13,7 +13,8 @@ services:
     volumes:
       - ./data:/data
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       - DATABASE_PATH=/data/ldavsync.db
     healthcheck:
