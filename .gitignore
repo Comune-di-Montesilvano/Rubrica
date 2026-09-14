@@ -37,3 +37,5 @@ Thumbs.db
 
 # Superpowers brainstorming companion mockups
 .superpowers/
+.playwright-mcp/
+.serena/
