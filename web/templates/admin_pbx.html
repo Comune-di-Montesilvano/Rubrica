@@ -162,3 +162,34 @@
     <p class="helptext" style="text-align:center;padding:16px 0;">Nessun numero riciclabile da segnalare.</p>
     {{end}}
 </div>
+
+<div class="card" style="margin-top:16px;">
+    <h3>Membri disattivi nei gruppi di chiamata</h3>
+    <div class="helptext" style="margin-bottom:10px;">
+        Interno appartenente a un gruppo di chiamata del centralino, ma il cui titolare è disabilitato in AD/LDAP — il gruppo continua a squillare su un interno non più attivo. Calcolato all'ultimo sync PBX riuscito; i nominativi disattivi non compaiono comunque nel gruppo mostrato in rubrica.
+    </div>
+    {{if .DisabledGroupMembers}}
+    <div class="modal-scroll-x">
+    <table>
+        <thead>
+            <tr>
+                <th>Gruppo</th>
+                <th>Interno membro</th>
+                <th>Nome (dominio, disabilitato)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .DisabledGroupMembers}}
+            <tr>
+                <td class="num">{{.GroupNumber}} — {{.GroupName}}</td>
+                <td class="num">{{.Extension}}</td>
+                <td>{{.DomainName}}</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    </div>
+    {{else}}
+    <p class="helptext" style="text-align:center;padding:16px 0;">Nessun membro disattivo da segnalare.</p>
+    {{end}}
+</div>

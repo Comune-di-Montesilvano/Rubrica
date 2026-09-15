@@ -244,12 +244,55 @@ func FindReclaimableExtensions(db *database.DB, peers []Peer) ([]ReclaimableExte
 	return reclaimable, nil
 }
 
+// DisabledGroupMember segnala un membro di un gruppo di chiamata del
+// centralino il cui interno corrisponde a un contatto di dominio
+// DISABILITATO — il gruppo continua a "chiamare" un interno il cui titolare
+// non è più attivo in AD (account disabilitato, spesso anche fuori dai
+// gruppi AD che pilotano LDAP_ALLOWED_GROUPS). Diverso da
+// ReclaimableExtension: qui il confronto non è sul nome del peer SIP, ma
+// sull'appartenenza effettiva al gruppo (membri già risolti da ApplyCallGroups
+// via GetContactByExtension, che non filtra disabled).
+type DisabledGroupMember struct {
+	GroupNumber string
+	GroupName   string
+	Extension   string
+	DomainName  string
+}
+
+// FindDisabledGroupMembers confronta i membri di ogni call group con
+// l'anagrafica interni disabilitati in dominio e segnala quelli disattivi —
+// va chiamato sui call group già filtrati (stesso punto di
+// FindNameMismatches/FindReclaimableExtensions), prima di ApplyCallGroups.
+func FindDisabledGroupMembers(db *database.DB, groups []CallGroup) ([]DisabledGroupMember, error) {
+	disabledNames, err := db.ListDisabledLDAPExtensionNames()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list disabled ldap extension names: %w", err)
+	}
+	var flagged []DisabledGroupMember
+	for _, g := range groups {
+		for _, ext := range g.Members {
+			domainName, ok := disabledNames[ext]
+			if !ok {
+				continue
+			}
+			flagged = append(flagged, DisabledGroupMember{
+				GroupNumber: g.Extension,
+				GroupName:   g.Name,
+				Extension:   ext,
+				DomainName:  domainName,
+			})
+		}
+	}
+	return flagged, nil
+}
+
 // SyncResult raccoglie le diagnostiche calcolate durante un giro di sync,
 // oltre all'applicazione vera e propria dei dati — mostrate dalla pagina
 // admin /admin/pbx per aiutare a tenere allineati centralino e dominio.
 type SyncResult struct {
-	Mismatches  []NameMismatch
-	Reclaimable []ReclaimableExtension
+	Mismatches           []NameMismatch
+	Reclaimable          []ReclaimableExtension
+	DisabledGroupMembers []DisabledGroupMember
 }
 
 // SyncPBX esegue un giro completo di sync (login, fetch, filtra, applica).
@@ -305,6 +348,9 @@ func SyncPBX(db *database.DB, onPhase func(phase string)) (SyncResult, error) {
 	}
 	if result.Reclaimable, err = FindReclaimableExtensions(db, peers); err != nil {
 		log.Printf("[PBX] Failed to compute reclaimable extensions: %v", err)
+	}
+	if result.DisabledGroupMembers, err = FindDisabledGroupMembers(db, groups); err != nil {
+		log.Printf("[PBX] Failed to compute disabled group members: %v", err)
 	}
 
 	onPhase("Applicazione dati...")
