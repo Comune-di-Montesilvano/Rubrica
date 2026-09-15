@@ -462,11 +462,25 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var callGroupTree []*phonebook.GroupCategoryNode
+	var uncategorizedGroups []*phonebook.GroupWithMembers
+	if len(callGroups) > 0 {
+		categories, err := db.ListGroupCategories()
+		if err != nil {
+			log.Printf("[SEARCH] Failed to list group categories: %v", err)
+			uncategorizedGroups = callGroups
+		} else {
+			callGroupTree, uncategorizedGroups = phonebook.BuildGroupCategoryTree(callGroups, categories)
+		}
+	}
+
 	locale := i18n.ResolveLocale(r)
 	data := map[string]interface{}{
-		"Groups":     phonebook.GroupByDepartment(results),
-		"CallGroups": callGroups,
-		"Messages":   i18n.GetMessages(locale),
+		"Groups":              phonebook.GroupByDepartment(results),
+		"CallGroups":          callGroups,
+		"CallGroupTree":       callGroupTree,
+		"UncategorizedGroups": uncategorizedGroups,
+		"Messages":            i18n.GetMessages(locale),
 	}
 
 	templates.ExecuteTemplate(w, "search_results.html", data)
