@@ -240,6 +240,7 @@ func main() {
 	r.HandleFunc("/search", handleSearch).Methods("GET")
 	r.HandleFunc("/contacts", handleContacts).Methods("GET")
 	r.HandleFunc("/contacts/{uid}", handleContactDetail).Methods("GET")
+	r.HandleFunc("/contacts/{uid}/fragment", handleContactDetailFragment).Methods("GET")
 	r.HandleFunc("/contacts/{uid}/export", handleExportVCard).Methods("GET")
 	r.HandleFunc("/health", handleHealth).Methods("GET")
 	r.HandleFunc("/version", handleVersion).Methods("GET")
@@ -540,12 +541,25 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// GroupMatches alimenta il dropdown "hover" sopra l'header della
+	// colonna Chiamate di gruppo: solo con una query attiva (altrimenti
+	// mostrerebbe i primi 10 gruppi sempre, anche a ricerca vuota), primi
+	// 10 risultati già filtrati sopra su nome/numero.
+	var groupMatches []*phonebook.GroupWithMembers
+	if query != "" {
+		groupMatches = callGroups
+		if len(groupMatches) > 10 {
+			groupMatches = groupMatches[:10]
+		}
+	}
+
 	locale := i18n.ResolveLocale(r)
 	data := map[string]interface{}{
 		"Groups":              phonebook.GroupByDepartment(results),
 		"CallGroups":          callGroups,
 		"CallGroupTree":       callGroupTree,
 		"UncategorizedGroups": uncategorizedGroups,
+		"GroupMatches":        groupMatches,
 		"Messages":            i18n.GetMessages(locale),
 	}
 
@@ -598,6 +612,33 @@ func handleContactDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	templates.ExecuteTemplate(w, "contact_detail.html", data)
+}
+
+// handleContactDetailFragment serve solo il frammento (senza shell di
+// pagina) per il popup modale in rubrica pubblica — stessa logica di
+// handleContactDetail, la pagina dedicata resta per link diretti/condivisi.
+func handleContactDetailFragment(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	uid := vars["uid"]
+
+	contactWithGroups, err := pbService.GetContactWithGroups(uid)
+	if err != nil {
+		log.Printf("[CONTACT] Failed to get %s: %v", uid, err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	if contactWithGroups == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	locale := i18n.ResolveLocale(r)
+	data := map[string]interface{}{
+		"Contact":  contactWithGroups.Contact,
+		"Groups":   contactWithGroups.Groups,
+		"Messages": i18n.GetMessages(locale),
+	}
+	templates.ExecuteTemplate(w, "contact_detail_fragment.html", data)
 }
 
 func handleExportVCard(w http.ResponseWriter, r *http.Request) {

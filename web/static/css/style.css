@@ -157,8 +157,23 @@ a { color: inherit; }
 
 /* --- Gruppi reparto + righe contatto --- */
 
-.dept { margin-top: 24px; }
+.dept { margin-top: 24px; position: relative; }
 .dept:first-child { margin-top: 0; }
+
+/* --- Dropdown "hover" risultati ricerca sopra Chiamate di gruppo ---
+   Ancorato a .results-groups (non a .dept-head, e non dentro
+   .results-groups-scroll) apposta: deve restare visibile sopra la lista
+   anche quando quest'ultima è scrollata, e non venire clippato
+   dall'overflow del wrapper di scroll interno. top è un'approssimazione
+   dell'altezza dell'header "Chiamate di gruppo" (.dept-head). */
+.group-search-dropdown {
+    position: absolute; top: 42px; left: 0; right: 0; z-index: 15;
+    background: var(--paper-raised); border: 1px solid var(--line); border-radius: 7px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.2); max-height: 320px; overflow-y: auto;
+}
+.group-search-dropdown .search-dropdown-item { border-bottom: 1px solid var(--line); }
+.group-search-dropdown .search-dropdown-item:last-child { border-bottom: none; }
+.group-search-dropdown .search-dropdown-item .role { font-size: 14.5px; font-variant-numeric: tabular-nums; }
 .dept-head {
     display: flex; align-items: baseline; gap: 8px; cursor: pointer;
     padding: 8px 4px 7px; border-bottom: 1px solid var(--ink);
@@ -303,6 +318,12 @@ td.num { font-variant-numeric: tabular-nums; font-weight: 600; }
 .group-pop summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; color: var(--accent); }
 .group-pop summary::-webkit-details-marker { display: none; }
 .group-pop summary svg { width: 14px; height: 14px; }
+.group-pop-count {
+    position: absolute; top: -6px; right: -7px; min-width: 14px; height: 14px; padding: 0 3px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--accent); color: var(--paper-raised); border-radius: 999px;
+    font-size: 9.5px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums;
+}
 .group-pop-content {
     position: absolute; top: 100%; left: 0; z-index: 20; margin-top: 6px;
     background: var(--paper-raised); border: 1px solid var(--line); border-radius: 7px;
@@ -326,17 +347,17 @@ td.num { font-variant-numeric: tabular-nums; font-weight: 600; }
 .results-contacts { grid-area: contacts; min-width: 0; }
 
 /* Scrollbar sottile e in tema (dark/light) invece della scrollbar OS di
-   default — usata da .results-groups (sticky, scroll indipendente) e da
+   default — usata da .results-groups-scroll (scroll indipendente) e da
    .rail, entrambe overflow-y:auto su colonne strette dove una scrollbar
    larga standard è particolarmente invadente. */
-.results-groups, .rail {
+.results-groups-scroll, .rail {
     scrollbar-width: thin;
     scrollbar-color: var(--line) transparent;
 }
-.results-groups::-webkit-scrollbar, .rail::-webkit-scrollbar { width: 8px; }
-.results-groups::-webkit-scrollbar-track, .rail::-webkit-scrollbar-track { background: transparent; }
-.results-groups::-webkit-scrollbar-thumb, .rail::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
-.results-groups::-webkit-scrollbar-thumb:hover, .rail::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+.results-groups-scroll::-webkit-scrollbar, .rail::-webkit-scrollbar { width: 8px; }
+.results-groups-scroll::-webkit-scrollbar-track, .rail::-webkit-scrollbar-track { background: transparent; }
+.results-groups-scroll::-webkit-scrollbar-thumb, .rail::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+.results-groups-scroll::-webkit-scrollbar-thumb:hover, .rail::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 
 .results-groups {
     grid-area: groups;
@@ -344,12 +365,22 @@ td.num { font-variant-numeric: tabular-nums; font-weight: 600; }
     top: 0;
     align-self: flex-start;
     max-height: 100vh;
+}
+
+/* Lo scroll vive su questo wrapper interno, non su .results-groups —
+   .group-search-dropdown deve restare fuori da qualunque overflow:auto
+   per non finire clippato (un discendente position:absolute viene
+   comunque tagliato dall'overflow di un antenato anche se il suo
+   containing block è più su nella catena). */
+.results-groups-scroll {
+    max-height: 100vh;
     overflow-y: auto;
 }
 
 @media (max-width: 900px) {
     #search-results { grid-template-columns: 1fr; grid-template-areas: "contacts" "groups"; gap: 0; }
-    .results-groups { position: static; max-height: none; overflow-y: visible; }
+    .results-groups { position: static; max-height: none; }
+    .results-groups-scroll { max-height: none; overflow-y: visible; }
 }
 
 /* --- Riga "chiamata di gruppo" nella rubrica pubblica --- */
