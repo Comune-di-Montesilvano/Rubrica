@@ -34,6 +34,9 @@ type Config struct {
 	// Sync
 	SyncIntervalHours int
 
+	// Backup
+	BackupIntervalHours int
+
 	// Database
 	DatabasePath string
 
@@ -65,6 +68,7 @@ func Load() *Config {
 		LDAPOUFilters:       getEnvMapList("LDAP_OU_FILTERS", ";", ":", ",", defaultOUFilters()),
 		AdminUsers:          getEnvList("ADMIN_USERS", ";", []string{}),
 		SyncIntervalHours:   getEnvInt("SYNC_INTERVAL_HOURS", 1),
+		BackupIntervalHours: getEnvInt("BACKUP_INTERVAL_HOURS", 24),
 		DatabasePath:        getEnv("DATABASE_PATH", "/data/ldavsync.db"),
 		SessionSecret:       getEnv("SESSION_SECRET", "change-me-in-production"),
 		PrimaryNumberPrefix: getEnv("PRIMARY_NUMBER_PREFIX_TEMPLATE", "0854321{ext}"),

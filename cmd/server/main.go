@@ -4,8 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,6 +19,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/backup"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/carddav"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/config"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
@@ -89,9 +94,17 @@ func (s *syncStatus) snapshot() syncStatus {
 }
 
 var (
-	ldapManualSync = &syncStatus{}
-	pbxManualSync  = &syncStatus{}
+	ldapManualSync   = &syncStatus{}
+	pbxManualSync    = &syncStatus{}
+	backupManualSync = &syncStatus{}
 )
+
+// backupDir è la directory dei backup, derivata da DatabasePath (stesso
+// volume Docker della DB — vedi spec, nessuna env var dedicata in questa
+// prima versione).
+func backupDir() string {
+	return filepath.Join(filepath.Dir(cfg.DatabasePath), "backups")
+}
 
 func main() {
 	log.Printf("[MAIN] Starting Rubrica %s", AppVersion)
@@ -198,6 +211,9 @@ func main() {
 	// Start LDAP sync goroutine
 	go ldapSyncWorker()
 
+	// Start scheduled backup goroutine
+	go backupWorker()
+
 	// Perform initial sync
 	go func() {
 		if err := ldap.SyncContacts(db, cfg, nil); err != nil {
@@ -269,6 +285,12 @@ func main() {
 	admin.HandleFunc("/pbx", handleAdminSavePBXConfig).Methods("POST")
 	admin.HandleFunc("/pbx/sync", handleAdminSyncPBX).Methods("POST")
 	admin.HandleFunc("/pbx/sync/status", handleAdminSyncPBXStatus).Methods("GET")
+	admin.HandleFunc("/backup", handleAdminBackup).Methods("GET")
+	admin.HandleFunc("/backup/create", handleAdminCreateBackup).Methods("POST")
+	admin.HandleFunc("/backup/status", handleAdminBackupStatus).Methods("GET")
+	admin.HandleFunc("/backup/download/{name}", handleAdminDownloadBackup).Methods("GET")
+	admin.HandleFunc("/backup/{name}/delete", handleAdminDeleteBackup).Methods("POST")
+	admin.HandleFunc("/backup/restore", handleAdminRestoreBackup).Methods("POST")
 
 	// CardDAV server
 	carddavServer := carddav.NewServer(db, cfg)
@@ -302,6 +324,39 @@ func ldapSyncWorker() {
 		} else {
 			lastPBXSync = time.Now()
 			lastPBXSyncResult = result
+		}
+	}
+}
+
+// backupWorker esegue uno snapshot schedulato ogni BACKUP_INTERVAL_HOURS
+// e applica subito dopo la retention GFS — stesso pattern di
+// ldapSyncWorker, ma con un ticker indipendente (la cadenza di backup
+// non ha motivo di essere legata a quella del sync LDAP/PBX).
+func backupWorker() {
+	ticker := time.NewTicker(time.Duration(cfg.BackupIntervalHours) * time.Hour)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		log.Printf("[BACKUP] Starting scheduled backup...")
+		b, err := backup.CreateBackup(db.DB, backupDir(), false)
+		if err != nil {
+			log.Printf("[BACKUP] Scheduled backup failed: %v", err)
+			continue
+		}
+		log.Printf("[BACKUP] Scheduled backup created: %s", b.Name)
+
+		backups, err := backup.ListBackups(backupDir())
+		if err != nil {
+			log.Printf("[BACKUP] Failed to list backups for pruning: %v", err)
+			continue
+		}
+		deleted, err := backup.PruneScheduled(backups, time.Now())
+		if err != nil {
+			log.Printf("[BACKUP] Pruning failed: %v", err)
+			continue
+		}
+		if len(deleted) > 0 {
+			log.Printf("[BACKUP] Pruned %d old scheduled backups", len(deleted))
 		}
 	}
 }
@@ -1694,6 +1749,160 @@ func renderSyncStatusPBX(w http.ResponseWriter, r *http.Request) {
 		"OOBLabel":  "Ultimo sync riuscito: ",
 	}
 	templates.ExecuteTemplate(w, "sync_status.html", data)
+}
+
+// backupPageData raccoglie i dati comuni alla pagina /admin/backup e al
+// suo frammento — la lista backup va ricaricata ad ogni render perché
+// riflette lo stato del filesystem, non della DB.
+func backupPageData(r *http.Request) map[string]interface{} {
+	backups, err := backup.ListBackups(backupDir())
+	if err != nil {
+		log.Printf("[ADMIN] Failed to list backups: %v", err)
+	}
+	return map[string]interface{}{
+		"Backups":  backups,
+		"Messages": i18n.GetMessages(i18n.ResolveLocale(r)),
+	}
+}
+
+func handleAdminBackup(w http.ResponseWriter, r *http.Request) {
+	data := railData()
+	for k, v := range backupPageData(r) {
+		data[k] = v
+	}
+	data["Username"] = sessionAdminUsername(r)
+	data["Section"] = "admin-backup"
+	templates.ExecuteTemplate(w, "admin_page_backup.html", data)
+}
+
+func renderAdminBackup(w http.ResponseWriter, r *http.Request) {
+	templates.ExecuteTemplate(w, "admin_backup.html", backupPageData(r))
+}
+
+// handleAdminCreateBackup avvia un backup manuale in background e
+// ritorna subito il frammento di stato "in corso" — stesso pattern
+// async di handleAdminSyncPBX, riusa lo stesso sync_status.html.
+func handleAdminCreateBackup(w http.ResponseWriter, r *http.Request) {
+	backupManualSync.start()
+	go func() {
+		_, err := backup.CreateBackup(db.DB, backupDir(), true)
+		if err != nil {
+			log.Printf("[BACKUP] Manual backup failed: %v", err)
+		} else {
+			log.Printf("[BACKUP] Manual backup completed")
+		}
+		backupManualSync.finish(err)
+	}()
+	renderBackupSyncStatus(w, r)
+}
+
+func handleAdminBackupStatus(w http.ResponseWriter, r *http.Request) {
+	renderBackupSyncStatus(w, r)
+}
+
+func renderBackupSyncStatus(w http.ResponseWriter, r *http.Request) {
+	st := backupManualSync.snapshot()
+	data := map[string]interface{}{
+		"Running":   st.Running,
+		"Phase":     st.Phase,
+		"Message":   st.Message,
+		"IsError":   st.IsError,
+		"StatusURL": "/admin/backup/status",
+	}
+	if !st.Running {
+		// Il backup manuale appena creato deve comparire nella lista
+		// senza bisogno di un reload — swap-out-of-band sullo stesso
+		// contenitore usato dal caricamento pagina.
+		data["OOBBackupList"] = true
+	}
+	templates.ExecuteTemplate(w, "backup_sync_status.html", data)
+}
+
+// backupNamePattern valida {name} dagli URL di download/elimina — deve
+// combaciare esattamente con lo schema di naming di backup.CreateBackup,
+// altrimenti rifiuta (previene path traversal tipo "../../etc/passwd").
+var backupNamePattern = regexp.MustCompile(`^(scheduled|manual)-\d{8}T\d{6}\.db$`)
+
+func handleAdminDownloadBackup(w http.ResponseWriter, r *http.Request) {
+	name := mux.Vars(r)["name"]
+	if !backupNamePattern.MatchString(name) {
+		http.Error(w, "Nome file non valido", http.StatusBadRequest)
+		return
+	}
+	path := filepath.Join(backupDir(), name)
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
+	http.ServeFile(w, r, path)
+}
+
+func handleAdminDeleteBackup(w http.ResponseWriter, r *http.Request) {
+	name := mux.Vars(r)["name"]
+	if !backupNamePattern.MatchString(name) {
+		http.Error(w, "Nome file non valido", http.StatusBadRequest)
+		return
+	}
+	if err := os.Remove(filepath.Join(backupDir(), name)); err != nil && !os.IsNotExist(err) {
+		log.Printf("[ADMIN] Failed to delete backup %s: %v", name, err)
+	}
+	renderAdminBackup(w, r)
+}
+
+// handleAdminRestoreBackup sostituisce il DB corrente con il file
+// caricato e riavvia il processo — restart: unless-stopped in
+// docker-compose.yml lo rialza da solo (vedi spec). Il file va scritto
+// prima su un path temporaneo e validato PRIMA di chiudere la
+// connessione DB corrente: se la validazione fallisce, l'app continua a
+// girare normalmente invece di essere già a metà di uno swap.
+func handleAdminRestoreBackup(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 200<<20) // 200MB, ampio margine sulla dimensione tipica del DB
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		http.Error(w, "File troppo grande o richiesta non valida", http.StatusBadRequest)
+		return
+	}
+	file, _, err := r.FormFile("backup_file")
+	if err != nil {
+		http.Error(w, "File mancante", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	tmpPath := cfg.DatabasePath + ".restore-tmp"
+	out, err := os.Create(tmpPath)
+	if err != nil {
+		http.Error(w, "Impossibile scrivere il file temporaneo", http.StatusInternalServerError)
+		return
+	}
+	if _, err := io.Copy(out, file); err != nil {
+		out.Close()
+		os.Remove(tmpPath)
+		http.Error(w, "Errore durante la scrittura del file", http.StatusInternalServerError)
+		return
+	}
+	out.Close()
+
+	if err := backup.ValidateSQLiteHeader(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		http.Error(w, "Il file caricato non e' un database SQLite valido", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("[BACKUP] Ripristino richiesto da %s, riavvio in corso...", sessionAdminUsername(r))
+	db.Close()
+
+	if err := os.Rename(tmpPath, cfg.DatabasePath); err != nil {
+		log.Fatalf("[BACKUP] Failed to replace database file during restore: %v", err)
+	}
+	// File "gemelli" del vecchio DB (WAL/SHM) non corrispondono più al
+	// file appena scritto — lasciarli porta a "attempt to write a
+	// readonly database" al riavvio (vedi CLAUDE.md, gotcha incontrato
+	// manualmente in questa stessa sessione con un docker cp).
+	os.Remove(cfg.DatabasePath + "-wal")
+	os.Remove(cfg.DatabasePath + "-shm")
+
+	w.Write([]byte("Ripristino completato, il servizio si sta riavviando..."))
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	os.Exit(0)
 }
 
 // Helper function for vCard generation (reused from carddav package logic)
