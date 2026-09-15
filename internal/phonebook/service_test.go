@@ -44,6 +44,23 @@ func TestGroupByDepartment(t *testing.T) {
 	}
 }
 
+func TestGroupByDepartmentMergesCaseInsensitive(t *testing.T) {
+	contacts := []*ContactWithGroups{
+		{Contact: &database.Contact{UID: "ldap1", Department: "PALACONGRESSI", Source: "ldap"}},
+		{Contact: &database.Contact{UID: "pbx1", Department: "Palacongressi", Source: "pbx"}},
+		{Contact: &database.Contact{UID: "pbx2", Department: "palacongressi", Source: "pbx"}},
+	}
+
+	groups := GroupByDepartment(contacts)
+
+	if len(groups) != 1 {
+		t.Fatalf("got %d groups, want 1 (PALACONGRESSI/Palacongressi/palacongressi devono fondersi)", len(groups))
+	}
+	if len(groups[0].Contacts) != 3 {
+		t.Errorf("got %d contacts nel gruppo fuso, want 3", len(groups[0].Contacts))
+	}
+}
+
 func TestGroupByDepartmentEmptyInput(t *testing.T) {
 	groups := GroupByDepartment(nil)
 	if len(groups) != 0 {
