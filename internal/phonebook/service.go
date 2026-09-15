@@ -2,6 +2,7 @@ package phonebook
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
 )
@@ -165,11 +166,18 @@ type DepartmentGroup struct {
 
 // GroupByDepartment raggruppa i contatti per Department (etichetta così
 // com'è, non normalizzata qui — la sentence-case è responsabilità del
-// template). I contatti senza reparto vengono raggruppati per Area invece:
-// "politica" -> "Amministrazione politica", altrimenti -> "Senza reparto".
-// I gruppi sono sempre ordinati alfabeticamente per nome; i contatti
-// mantengono l'ordine di arrivo (i chiamanti passano risultati già
-// ordinati per display_name dalla query DB).
+// template). Il confronto è case-insensitive: contatti LDAP hanno spesso
+// il reparto tutto maiuscolo (attributo AD grezzo, es. "PALACONGRESSI"),
+// mentre un contatto PBX può prendere lo stesso nome dalla categoria
+// chiamate corrispondente con la casing scelta dall'admin (es.
+// "Palacongressi", vedi pbx.ApplyPeers) — senza normalizzare la chiave di
+// raggruppamento finirebbero in due sezioni separate che sentenceCase
+// renderizza comunque identiche, confondendo chi guarda la rubrica.
+// I contatti senza reparto vengono raggruppati per Area invece: "politica"
+// -> "Amministrazione politica", altrimenti -> "Senza reparto". I gruppi
+// sono sempre ordinati alfabeticamente per nome; i contatti mantengono
+// l'ordine di arrivo (i chiamanti passano risultati già ordinati per
+// display_name dalla query DB).
 // GroupCategoryNode è un nodo dell'albero di categorie per la colonna
 // "Chiamate di gruppo" (vedi
 // docs/superpowers/specs/2026-09-15-group-categories-hierarchy-design.md).
@@ -275,17 +283,18 @@ func GroupByDepartment(contacts []*ContactWithGroups) []*DepartmentGroup {
 				name = "Senza reparto"
 			}
 		}
-		i, ok := index[name]
+		key := strings.ToUpper(name)
+		i, ok := index[key]
 		if !ok {
 			i = len(groups)
-			index[name] = i
+			index[key] = i
 			groups = append(groups, &DepartmentGroup{Name: name})
 		}
 		groups[i].Contacts = append(groups[i].Contacts, c)
 	}
 
 	sort.SliceStable(groups, func(i, j int) bool {
-		return groups[i].Name < groups[j].Name
+		return strings.ToUpper(groups[i].Name) < strings.ToUpper(groups[j].Name)
 	})
 
 	return groups
