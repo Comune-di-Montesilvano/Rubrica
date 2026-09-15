@@ -74,8 +74,11 @@ a { color: inherit; }
     padding: 0 20px 20px;
     color: var(--ink);
     text-decoration: none;
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 9px;
 }
+.rail-brand img { flex: 0 0 auto; }
 
 .rail-brand span { color: var(--accent); }
 
@@ -223,7 +226,7 @@ a { color: inherit; }
     display: flex; align-items: center; justify-content: space-between;
     padding: 16px 32px; border-bottom: 1px solid var(--line);
 }
-.topbar-brand { font-family: 'IBM Plex Sans'; font-weight: 700; font-size: 18.5px; text-decoration: none; color: var(--ink); }
+.topbar-brand { font-family: 'IBM Plex Sans'; font-weight: 700; font-size: 18.5px; text-decoration: none; color: var(--ink); display: flex; align-items: center; gap: 8px; }
 .topbar-brand span { color: var(--accent); }
 .topbar a.back { font-size: 15px; color: var(--ink-soft); text-decoration: none; }
 
@@ -297,7 +300,7 @@ td.num { font-family: 'IBM Plex Mono'; font-variant-numeric: tabular-nums; font-
 
 .login-shell { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
 .login-card { background: var(--paper-raised); border: 1px solid var(--line); border-radius: 10px; padding: 32px; width: 100%; max-width: 360px; }
-.login-title { font-family: 'IBM Plex Sans'; font-weight: 700; font-size: 20.5px; text-align: center; margin: 0 0 24px; }
+.login-title { font-family: 'IBM Plex Sans'; font-weight: 700; font-size: 20.5px; text-align: center; margin: 0 0 24px; display: flex; align-items: center; justify-content: center; gap: 10px; }
 .login-field { margin-bottom: 14px; }
 .login-field label { display: block; font-size: 14px; color: var(--ink-soft); margin-bottom: 5px; }
 

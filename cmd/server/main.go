@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -291,7 +293,9 @@ func main() {
 	admin.HandleFunc("/backup/status", handleAdminBackupStatus).Methods("GET")
 	admin.HandleFunc("/backup/download/{name}", handleAdminDownloadBackup).Methods("GET")
 	admin.HandleFunc("/backup/{name}/delete", handleAdminDeleteBackup).Methods("POST")
-	admin.HandleFunc("/backup/restore", handleAdminRestoreBackup).Methods("POST")
+	admin.HandleFunc("/backup/restore/start", handleAdminRestoreStart).Methods("POST")
+	admin.HandleFunc("/backup/restore/chunk/{id}", handleAdminRestoreChunk).Methods("POST")
+	admin.HandleFunc("/backup/restore/complete/{id}", handleAdminRestoreComplete).Methods("POST")
 
 	// CardDAV server
 	carddavServer := carddav.NewServer(db, cfg)
@@ -1887,38 +1891,80 @@ func handleAdminDeleteBackup(w http.ResponseWriter, r *http.Request) {
 	renderAdminBackup(w, r)
 }
 
-// handleAdminRestoreBackup sostituisce il DB corrente con il file
-// caricato e riavvia il processo — restart: unless-stopped in
-// docker-compose.yml lo rialza da solo (vedi spec). Il file va scritto
-// prima su un path temporaneo e validato PRIMA di chiudere la
-// connessione DB corrente: se la validazione fallisce, l'app continua a
-// girare normalmente invece di essere già a metà di uno swap.
-func handleAdminRestoreBackup(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 200<<20) // 200MB, ampio margine sulla dimensione tipica del DB
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		http.Error(w, "File troppo grande o richiesta non valida", http.StatusBadRequest)
-		return
-	}
-	file, _, err := r.FormFile("backup_file")
-	if err != nil {
-		http.Error(w, "File mancante", http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
+// restoreUploadIDPattern valida l'id di un upload di ripristino in corso
+// (32 caratteri esadecimali, generato server-side in
+// handleAdminRestoreStart) — usato per costruire il path del file
+// temporaneo, va validato prima di ogni uso per non finire con un path
+// traversal se qualcuno chiama gli endpoint chunk/complete a mano.
+var restoreUploadIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
-	tmpPath := cfg.DatabasePath + ".restore-tmp"
-	out, err := os.Create(tmpPath)
+func restoreUploadPath(id string) string {
+	return cfg.DatabasePath + ".restore-upload-" + id
+}
+
+// handleAdminRestoreStart genera un id di upload e crea il file
+// temporaneo vuoto che raccoglierà i chunk — il reverse proxy davanti a
+// Rubrica ha un limite di 1MB per richiesta, quindi il ripristino non può
+// essere un singolo upload multipart (vedi handleAdminRestoreChunk).
+func handleAdminRestoreStart(w http.ResponseWriter, r *http.Request) {
+	idBytes := make([]byte, 16)
+	if _, err := rand.Read(idBytes); err != nil {
+		http.Error(w, "Impossibile avviare il ripristino", http.StatusInternalServerError)
+		return
+	}
+	id := hex.EncodeToString(idBytes)
+
+	f, err := os.Create(restoreUploadPath(id))
 	if err != nil {
-		http.Error(w, "Impossibile scrivere il file temporaneo", http.StatusInternalServerError)
+		http.Error(w, "Impossibile creare il file temporaneo", http.StatusInternalServerError)
 		return
 	}
-	if _, err := io.Copy(out, file); err != nil {
-		out.Close()
-		os.Remove(tmpPath)
-		http.Error(w, "Errore durante la scrittura del file", http.StatusInternalServerError)
+	f.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"uploadId": id})
+}
+
+// handleAdminRestoreChunk accoda il corpo grezzo della richiesta (un
+// pezzo di massimo 900KB, tagliato lato client — vedi admin_backup.html)
+// al file temporaneo dell'upload. I chunk arrivano in ordine perché il
+// client attende la risposta di un chunk prima di inviare il successivo,
+// quindi un semplice append basta, nessun indice/riordino lato server.
+func handleAdminRestoreChunk(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	if !restoreUploadIDPattern.MatchString(id) {
+		http.Error(w, "Upload non valido", http.StatusBadRequest)
 		return
 	}
-	out.Close()
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 chunk, mai oltre il limite del proxy
+	f, err := os.OpenFile(restoreUploadPath(id), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		http.Error(w, "Upload non trovato o scaduto", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+
+	if _, err := io.Copy(f, r.Body); err != nil {
+		http.Error(w, "Errore durante la scrittura del chunk", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleAdminRestoreComplete valida il file riassemblato e, se è un DB
+// SQLite valido, sostituisce il DB corrente e riavvia il processo —
+// restart: unless-stopped in docker-compose.yml lo rialza da solo (vedi
+// spec). La validazione avviene PRIMA di chiudere la connessione DB
+// corrente: se fallisce, l'app continua a girare normalmente invece di
+// essere già a metà di uno swap.
+func handleAdminRestoreComplete(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	if !restoreUploadIDPattern.MatchString(id) {
+		http.Error(w, "Upload non valido", http.StatusBadRequest)
+		return
+	}
+	tmpPath := restoreUploadPath(id)
 
 	if err := backup.ValidateSQLiteHeader(tmpPath); err != nil {
 		os.Remove(tmpPath)

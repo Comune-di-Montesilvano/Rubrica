@@ -45,10 +45,49 @@
 
 <div class="card" style="margin-top:16px;">
     <h3>Ripristina da backup</h3>
-    <p class="helptext" style="margin-bottom:10px;color:var(--danger);">Sostituisce tutti i dati correnti con quelli del file caricato. Operazione irreversibile: il servizio si riavvia subito dopo.</p>
-    <form method="POST" action="/admin/backup/restore" enctype="multipart/form-data" onsubmit="return confirm('Sostituire TUTTI i dati correnti con questo backup? Operazione irreversibile.');" style="display:flex;gap:10px;align-items:center;">
-        <input type="file" name="backup_file" accept=".db" required class="input">
-        <button type="submit" class="btn btn-danger" style="flex:none;">Ripristina</button>
+    <p class="helptext" style="margin-bottom:10px;color:var(--danger);">Sostituisce tutti i dati correnti con quelli del file caricato. Operazione irreversibile: il servizio si riavvia subito dopo. Il file viene caricato a pezzi da 900KB (il proxy davanti a Rubrica rifiuta richieste oltre 1MB).</p>
+    <form id="restore-form" onsubmit="return false;" style="display:flex;gap:10px;align-items:center;">
+        <input type="file" id="restore-file" accept=".db" required class="input">
+        <button type="button" id="restore-submit" class="btn btn-danger" style="flex:none;" onclick="submitRestore()">Ripristina</button>
     </form>
+    <div id="restore-status" class="helptext" style="margin-top:8px;"></div>
 </div>
 </div>
+
+<script>
+    const RESTORE_CHUNK_SIZE = 900 * 1024;
+
+    async function submitRestore() {
+        const input = document.getElementById('restore-file');
+        const file = input.files[0];
+        if (!file) return;
+        if (!confirm('Sostituire TUTTI i dati correnti con questo backup? Operazione irreversibile.')) return;
+
+        const btn = document.getElementById('restore-submit');
+        const status = document.getElementById('restore-status');
+        btn.disabled = true;
+
+        try {
+            const startRes = await fetch('/admin/backup/restore/start', { method: 'POST' });
+            if (!startRes.ok) throw new Error('Impossibile avviare il ripristino');
+            const { uploadId } = await startRes.json();
+
+            const totalChunks = Math.ceil(file.size / RESTORE_CHUNK_SIZE) || 1;
+            for (let i = 0; i < totalChunks; i++) {
+                const chunk = file.slice(i * RESTORE_CHUNK_SIZE, (i + 1) * RESTORE_CHUNK_SIZE);
+                status.textContent = 'Caricamento in corso... (' + (i + 1) + '/' + totalChunks + ')';
+                const chunkRes = await fetch('/admin/backup/restore/chunk/' + uploadId, { method: 'POST', body: chunk });
+                if (!chunkRes.ok) throw new Error('Errore durante il caricamento del pezzo ' + (i + 1));
+            }
+
+            status.textContent = 'Verifica e ripristino in corso...';
+            const completeRes = await fetch('/admin/backup/restore/complete/' + uploadId, { method: 'POST' });
+            const text = await completeRes.text();
+            if (!completeRes.ok) throw new Error(text || 'Ripristino fallito');
+            status.textContent = text;
+        } catch (err) {
+            status.textContent = 'Errore: ' + err.message;
+            btn.disabled = false;
+        }
+    }
+</script>
