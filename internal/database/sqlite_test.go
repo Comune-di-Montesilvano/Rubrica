@@ -187,6 +187,28 @@ func TestSoftDeleteStale(t *testing.T) {
 	}
 }
 
+func TestGroupCategoryListEmpty(t *testing.T) {
+	db := newTestDB(t)
+	categories, err := db.ListGroupCategories()
+	if err != nil {
+		t.Fatalf("ListGroupCategories failed: %v", err)
+	}
+	if len(categories) != 0 {
+		t.Fatalf("got %d categories on fresh DB, want 0", len(categories))
+	}
+}
+
+func TestGroupCategoryGetMissing(t *testing.T) {
+	db := newTestDB(t)
+	c, err := db.GetGroupCategory(999)
+	if err != nil {
+		t.Fatalf("GetGroupCategory failed: %v", err)
+	}
+	if c != nil {
+		t.Fatal("GetGroupCategory should return nil for missing id")
+	}
+}
+
 func TestAreaCRUD(t *testing.T) {
 	db := newTestDB(t)
 
