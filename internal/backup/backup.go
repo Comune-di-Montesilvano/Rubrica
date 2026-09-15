@@ -105,3 +105,55 @@ func ListBackups(dir string) ([]*BackupFile, error) {
 	sort.Slice(backups, func(i, j int) bool { return backups[i].CreatedAt.After(backups[j].CreatedAt) })
 	return backups, nil
 }
+
+// PruneScheduled applica la retention GFS (grandfather/father/son) ai
+// soli backup con Manual=false — i manuali restano finché un admin non
+// li elimina esplicitamente. Funziona meglio se backups è già ordinato
+// più recenti prima (come ritornato da ListBackups): per ogni bucket
+// settimana/mese tiene il primo che incontra, che così è il più recente.
+// Ritorna i file eliminati (già rimossi dal filesystem al momento del
+// ritorno).
+func PruneScheduled(backups []*BackupFile, now time.Time) ([]*BackupFile, error) {
+	const day = 24 * time.Hour
+	var deleted []*BackupFile
+	seenWeek := map[string]bool{}
+	seenMonth := map[string]bool{}
+
+	for _, b := range backups {
+		if b.Manual {
+			continue
+		}
+		age := now.Sub(b.CreatedAt)
+
+		var bucketKey string
+		var seen map[string]bool
+		switch {
+		case age <= 7*day:
+			continue // livello giornaliero: tenuto sempre
+		case age <= 35*day:
+			year, week := b.CreatedAt.ISOWeek()
+			bucketKey = fmt.Sprintf("%d-W%02d", year, week)
+			seen = seenWeek
+		case age <= 365*day:
+			bucketKey = b.CreatedAt.Format("2006-01")
+			seen = seenMonth
+		default:
+			if err := os.Remove(b.Path); err != nil {
+				return deleted, fmt.Errorf("failed to remove %s: %w", b.Path, err)
+			}
+			deleted = append(deleted, b)
+			continue
+		}
+
+		if seen[bucketKey] {
+			if err := os.Remove(b.Path); err != nil {
+				return deleted, fmt.Errorf("failed to remove %s: %w", b.Path, err)
+			}
+			deleted = append(deleted, b)
+		} else {
+			seen[bucketKey] = true
+		}
+	}
+
+	return deleted, nil
+}
