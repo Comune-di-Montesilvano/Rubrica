@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -274,6 +275,7 @@ func main() {
 	admin.HandleFunc("/backup/status", handleAdminBackupStatus).Methods("GET")
 	admin.HandleFunc("/backup/download/{name}", handleAdminDownloadBackup).Methods("GET")
 	admin.HandleFunc("/backup/{name}/delete", handleAdminDeleteBackup).Methods("POST")
+	admin.HandleFunc("/backup/restore", handleAdminRestoreBackup).Methods("POST")
 
 	// CardDAV server
 	carddavServer := carddav.NewServer(db, cfg)
@@ -1698,6 +1700,65 @@ func handleAdminDeleteBackup(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[ADMIN] Failed to delete backup %s: %v", name, err)
 	}
 	renderAdminBackup(w, r)
+}
+
+// handleAdminRestoreBackup sostituisce il DB corrente con il file
+// caricato e riavvia il processo — restart: unless-stopped in
+// docker-compose.yml lo rialza da solo (vedi spec). Il file va scritto
+// prima su un path temporaneo e validato PRIMA di chiudere la
+// connessione DB corrente: se la validazione fallisce, l'app continua a
+// girare normalmente invece di essere già a metà di uno swap.
+func handleAdminRestoreBackup(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 200<<20) // 200MB, ampio margine sulla dimensione tipica del DB
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		http.Error(w, "File troppo grande o richiesta non valida", http.StatusBadRequest)
+		return
+	}
+	file, _, err := r.FormFile("backup_file")
+	if err != nil {
+		http.Error(w, "File mancante", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	tmpPath := cfg.DatabasePath + ".restore-tmp"
+	out, err := os.Create(tmpPath)
+	if err != nil {
+		http.Error(w, "Impossibile scrivere il file temporaneo", http.StatusInternalServerError)
+		return
+	}
+	if _, err := io.Copy(out, file); err != nil {
+		out.Close()
+		os.Remove(tmpPath)
+		http.Error(w, "Errore durante la scrittura del file", http.StatusInternalServerError)
+		return
+	}
+	out.Close()
+
+	if err := backup.ValidateSQLiteHeader(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		http.Error(w, "Il file caricato non e' un database SQLite valido", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("[BACKUP] Ripristino richiesto da %s, riavvio in corso...", sessionAdminUsername(r))
+	db.Close()
+
+	if err := os.Rename(tmpPath, cfg.DatabasePath); err != nil {
+		log.Fatalf("[BACKUP] Failed to replace database file during restore: %v", err)
+	}
+	// File "gemelli" del vecchio DB (WAL/SHM) non corrispondono più al
+	// file appena scritto — lasciarli porta a "attempt to write a
+	// readonly database" al riavvio (vedi CLAUDE.md, gotcha incontrato
+	// manualmente in questa stessa sessione con un docker cp).
+	os.Remove(cfg.DatabasePath + "-wal")
+	os.Remove(cfg.DatabasePath + "-shm")
+
+	w.Write([]byte("Ripristino completato, il servizio si sta riavviando..."))
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	os.Exit(0)
 }
 
 // Helper function for vCard generation (reused from carddav package logic)
