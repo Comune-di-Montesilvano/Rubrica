@@ -67,6 +67,25 @@ type GroupNumber struct {
 	UpdatedAt    time.Time
 }
 
+// GroupCategory raggruppa i gruppi di chiamata (group_numbers) in
+// sezioni gerarchiche a display-time (nessuna colonna su group_numbers) —
+// vedi docs/superpowers/specs/2026-09-15-group-categories-hierarchy-design.md.
+// ParentID nil = categoria di primo livello (es. "Uffici"); non-nil =
+// annidata sotto un'altra categoria (es. "Settore VI - Legale" dentro
+// "Uffici"). RangeStart/RangeEnd nil = nessuna regola (categoria mai
+// auto-assegnata, solo organizzativa se in futuro serve raggruppare a
+// mano — oggi il matching è sempre su range).
+type GroupCategory struct {
+	ID         int64
+	Key        string
+	Name       string
+	ParentID   *int64
+	RangeStart *int
+	RangeEnd   *int
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
 type GroupMember struct {
 	GroupID   int64
 	ContactID int64
@@ -163,6 +182,17 @@ func (db *DB) migrate() error {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		key TEXT NOT NULL UNIQUE,
 		name TEXT NOT NULL,
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS group_categories (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		key TEXT NOT NULL UNIQUE,
+		name TEXT NOT NULL DEFAULT '',
+		parent_id INTEGER REFERENCES group_categories(id),
+		range_start INTEGER,
+		range_end INTEGER,
 		created_at DATETIME NOT NULL,
 		updated_at DATETIME NOT NULL
 	);
@@ -923,6 +953,156 @@ func MatchExtensionRange(ext string, areas []*Area) *Area {
 		if n >= *a.RangeStart && n <= *a.RangeEnd {
 			return a
 		}
+	}
+	return nil
+}
+
+// MatchGroupCategory ritorna la group_category più specifica (range più
+// stretto) il cui [RangeStart, RangeEnd] contiene ext — a differenza di
+// MatchExtensionRange (che ritorna il primo match nell'ordine di lista e
+// non gestisce gerarchie), qui più categorie annidate possono coprire lo
+// stesso interno: vince quella col range più stretto, indipendentemente
+// dall'ordine di iterazione. Nil se ext non è numerico o nessuna regola
+// lo copre.
+func MatchGroupCategory(ext string, categories []*GroupCategory) *GroupCategory {
+	n, err := strconv.Atoi(ext)
+	if err != nil {
+		return nil
+	}
+	var best *GroupCategory
+	bestWidth := -1
+	for _, c := range categories {
+		if c.RangeStart == nil || c.RangeEnd == nil {
+			continue
+		}
+		if n < *c.RangeStart || n > *c.RangeEnd {
+			continue
+		}
+		width := *c.RangeEnd - *c.RangeStart
+		if best == nil || width < bestWidth {
+			best = c
+			bestWidth = width
+		}
+	}
+	return best
+}
+
+// ListGroupCategories returns all group categories, ordinate per
+// range_start crescente (NULL per ultimo) poi per nome — stesso criterio
+// usato per l'ordinamento a display-time nell'albero pubblico.
+func (db *DB) ListGroupCategories() ([]*GroupCategory, error) {
+	rows, err := db.Query(`
+	SELECT id, key, name, parent_id, range_start, range_end, created_at, updated_at
+	FROM group_categories
+	ORDER BY (range_start IS NULL), range_start, name
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list group categories: %w", err)
+	}
+	defer rows.Close()
+
+	var categories []*GroupCategory
+	for rows.Next() {
+		c := &GroupCategory{}
+		if err := rows.Scan(&c.ID, &c.Key, &c.Name, &c.ParentID, &c.RangeStart, &c.RangeEnd, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan group category: %w", err)
+		}
+		categories = append(categories, c)
+	}
+	return categories, rows.Err()
+}
+
+// GetGroupCategory returns nil, nil se l'id non esiste.
+func (db *DB) GetGroupCategory(id int64) (*GroupCategory, error) {
+	c := &GroupCategory{}
+	err := db.QueryRow(`
+	SELECT id, key, name, parent_id, range_start, range_end, created_at, updated_at
+	FROM group_categories WHERE id = ?
+	`, id).Scan(&c.ID, &c.Key, &c.Name, &c.ParentID, &c.RangeStart, &c.RangeEnd, &c.CreatedAt, &c.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get group category: %w", err)
+	}
+	return c, nil
+}
+
+// CreateGroupCategory inserts a new group category. Key must be unique.
+func (db *DB) CreateGroupCategory(c *GroupCategory) error {
+	now := time.Now()
+	c.CreatedAt = now
+	c.UpdatedAt = now
+
+	result, err := db.Exec(`
+	INSERT INTO group_categories (key, name, parent_id, range_start, range_end, created_at, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, c.Key, c.Name, c.ParentID, c.RangeStart, c.RangeEnd, c.CreatedAt, c.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("failed to create group category: %w", err)
+	}
+	id, _ := result.LastInsertId()
+	c.ID = id
+	return nil
+}
+
+// groupCategoryCreatesCycle risale la catena parent_id partendo da
+// candidateParent e ritorna true se incontra targetID — cioè se
+// assegnare candidateParent come genitore di targetID creerebbe un
+// ciclo (incluso il caso candidateParent == targetID, auto-genitore).
+func (db *DB) groupCategoryCreatesCycle(targetID, candidateParent int64) (bool, error) {
+	current := candidateParent
+	for {
+		if current == targetID {
+			return true, nil
+		}
+		var parentID sql.NullInt64
+		err := db.QueryRow(`SELECT parent_id FROM group_categories WHERE id = ?`, current).Scan(&parentID)
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("failed to walk group category parent chain: %w", err)
+		}
+		if !parentID.Valid {
+			return false, nil
+		}
+		current = parentID.Int64
+	}
+}
+
+// UpdateGroupCategory aggiorna nome, genitore e range insieme. Rifiuta un
+// parent_id che creerebbe un ciclo (una categoria genitore di se stessa,
+// direttamente o attraverso la catena).
+func (db *DB) UpdateGroupCategory(c *GroupCategory) error {
+	if c.ParentID != nil {
+		cycle, err := db.groupCategoryCreatesCycle(c.ID, *c.ParentID)
+		if err != nil {
+			return err
+		}
+		if cycle {
+			return fmt.Errorf("parent_id %d would create a cycle for group category %d", *c.ParentID, c.ID)
+		}
+	}
+	_, err := db.Exec(`
+	UPDATE group_categories SET name = ?, parent_id = ?, range_start = ?, range_end = ?, updated_at = ?
+	WHERE id = ?
+	`, c.Name, c.ParentID, c.RangeStart, c.RangeEnd, time.Now(), c.ID)
+	if err != nil {
+		return fmt.Errorf("failed to update group category: %w", err)
+	}
+	return nil
+}
+
+// DeleteGroupCategory removes a group category and orphans any child
+// (parent_id -> NULL, i figli restano ma tornano di primo livello)
+// invece di lasciare un riferimento pendente.
+func (db *DB) DeleteGroupCategory(id int64) error {
+	if _, err := db.Exec(`UPDATE group_categories SET parent_id = NULL WHERE parent_id = ?`, id); err != nil {
+		return fmt.Errorf("failed to orphan child group categories: %w", err)
+	}
+	if _, err := db.Exec(`DELETE FROM group_categories WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("failed to delete group category: %w", err)
 	}
 	return nil
 }

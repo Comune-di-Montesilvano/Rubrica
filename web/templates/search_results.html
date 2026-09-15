@@ -5,40 +5,15 @@
         <span class="dept-name">Chiamate di gruppo</span>
         <span class="dept-count">{{len .CallGroups}}</span>
     </summary>
-    {{range .CallGroups}}
-    <details class="group-row-details">
+    {{range .CallGroupTree}}{{template "group_category_node.html" .}}{{end}}
+    {{if .UncategorizedGroups}}
+    <details class="group-category-details">
         <summary>
-            <div class="row">
-                <div class="badge group-badge">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
-                </div>
-                <div class="who">
-                    <div class="name">
-                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
-                        {{.Group.Name}}
-                    </div>
-                    {{if .Group.Description}}<div class="role">{{.Group.Description}}</div>{{end}}
-                </div>
-                <div class="phone">
-                    <div class="phone-line">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5c0-1 1-1.5 1.8-1.2l2.4 1c.6.2 1 .8 1 1.4v2c0 .5-.2 1-.6 1.3l-1 .9c1 2.3 2.8 4.1 5.1 5.1l.9-1c.3-.4.8-.6 1.3-.6h2c.6 0 1.2.4 1.4 1l1 2.4c.3.8-.2 1.8-1.2 1.8-8 0-14-6-14-14z"/></svg>
-                        {{.Group.Number}}
-                    </div>
-                    <div class="phone-line muted">{{len .ActiveMembers}} membri</div>
-                </div>
-            </div>
+            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+            <span class="group-category-name">Altre chiamate</span>
         </summary>
-        <div class="group-members">
-            {{if .ActiveMembers}}
-            {{range .ActiveMembers}}
-            <div class="group-member-line">
-                <span>{{.DisplayName}}</span>
-                <span>{{if .LDAPExt}}int. {{extList .LDAPExt}}{{else}}{{.PrimaryNumber}}{{end}}</span>
-            </div>
-            {{end}}
-            {{else}}
-            <div class="group-member-line"><span class="muted">Nessun membro</span></div>
-            {{end}}
+        <div class="group-category-children">
+            {{range .UncategorizedGroups}}{{template "group_row.html" .}}{{end}}
         </div>
     </details>
     {{end}}
