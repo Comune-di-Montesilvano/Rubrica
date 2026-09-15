@@ -140,6 +140,17 @@ func main() {
 		"extList": func(s string) string {
 			return strings.ReplaceAll(s, ";", ", ")
 		},
+		// derefInt64ID: confronto diretto {{eq $ptr .ID}} tra *int64 e
+		// int64 fa fallire "eq" (tipi incompatibili) e tronca il resto
+		// del template — usata per confrontare GroupCategory.ParentID
+		// (nullable) con l'ID di un'altra categoria nel select "genitore".
+		// nil -> 0, mai collidente con un ID reale (AUTOINCREMENT parte da 1).
+		"derefInt64ID": func(p *int64) int64 {
+			if p == nil {
+				return 0
+			}
+			return *p
+		},
 		"substr": func(s string, start, length int) string {
 			if start < 0 || start >= len(s) {
 				return ""

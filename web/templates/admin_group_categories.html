@@ -3,6 +3,7 @@
 </div>
 <p class="helptext" style="margin:8px 0 12px;">Raggruppano la colonna "Chiamate di gruppo" in rubrica per interno (es. "Uffici" 400&ndash;499 contiene "Settore VI - Legale" 401&ndash;404). Una categoria genitore mostra le proprie chiamate insieme a quelle delle categorie figlie. Eliminare una categoria con figli li riporta a primo livello, non li elimina.</p>
 
+<div class="modal-scroll-x">
 <table>
     <thead><tr><th>Nome</th><th>Chiave</th><th>Genitore</th><th>Range interni</th><th></th></tr></thead>
     <tbody>
@@ -10,17 +11,18 @@
         <tr>
             <td>
                 <form id="gc-form-{{.ID}}" hx-post="/admin/group-categories/{{.ID}}" hx-target="#group-categories-content" hx-swap="innerHTML" style="margin:0;">
-                    <input type="text" name="name" value="{{.Name}}" class="input" style="width:100%;">
+                    <input type="text" name="name" value="{{.Name}}" class="input" style="width:100%;min-width:180px;">
                 </form>
             </td>
             <td class="num">{{.Key}}</td>
             <td>
                 <select name="parent_id" form="gc-form-{{.ID}}" class="input">
                     <option value="">Nessuna</option>
-                    {{$current := .}}
+                    {{$currentID := .ID}}
+                    {{$currentParent := derefInt64ID .ParentID}}
                     {{range $.Categories}}
-                    {{if ne .ID $current.ID}}
-                    <option value="{{.ID}}" {{if and $current.ParentID (eq $current.ParentID .ID)}}selected{{end}}>{{.Name}}</option>
+                    {{if ne .ID $currentID}}
+                    <option value="{{.ID}}" {{if eq $currentParent .ID}}selected{{end}}>{{.Name}}</option>
                     {{end}}
                     {{end}}
                 </select>
@@ -44,6 +46,7 @@
         {{end}}
     </tbody>
 </table>
+</div>
 
 <form hx-post="/admin/group-categories" hx-target="#group-categories-content" hx-swap="innerHTML" class="field-row" style="margin-top:14px;">
     <input type="text" name="name" placeholder="Nuova categoria (es. Settore VI - Legale)" class="input" required>
