@@ -1,0 +1,59 @@
+<div class="section-head">
+    <h3>Categorie chiamate di gruppo</h3>
+</div>
+<p class="helptext" style="margin:8px 0 12px;">Raggruppano la colonna "Chiamate di gruppo" in rubrica per interno (es. "Uffici" 400&ndash;499 contiene "Settore VI - Legale" 401&ndash;404). Una categoria genitore mostra le proprie chiamate insieme a quelle delle categorie figlie. Eliminare una categoria con figli li riporta a primo livello, non li elimina.</p>
+
+<table>
+    <thead><tr><th>Nome</th><th>Chiave</th><th>Genitore</th><th>Range interni</th><th></th></tr></thead>
+    <tbody>
+        {{range .Categories}}
+        <tr>
+            <td>
+                <form id="gc-form-{{.ID}}" hx-post="/admin/group-categories/{{.ID}}" hx-target="#group-categories-content" hx-swap="innerHTML" style="margin:0;">
+                    <input type="text" name="name" value="{{.Name}}" class="input" style="width:100%;">
+                </form>
+            </td>
+            <td class="num">{{.Key}}</td>
+            <td>
+                <select name="parent_id" form="gc-form-{{.ID}}" class="input">
+                    <option value="">Nessuna</option>
+                    {{$current := .}}
+                    {{range $.Categories}}
+                    {{if ne .ID $current.ID}}
+                    <option value="{{.ID}}" {{if and $current.ParentID (eq $current.ParentID .ID)}}selected{{end}}>{{.Name}}</option>
+                    {{end}}
+                    {{end}}
+                </select>
+            </td>
+            <td>
+                <div class="field-row" style="margin:0;">
+                    <input type="text" name="range_start" form="gc-form-{{.ID}}" value="{{if .RangeStart}}{{.RangeStart}}{{end}}" placeholder="da" class="input" style="width:70px;">
+                    <span class="helptext">&ndash;</span>
+                    <input type="text" name="range_end" form="gc-form-{{.ID}}" value="{{if .RangeEnd}}{{.RangeEnd}}{{end}}" placeholder="a" class="input" style="width:70px;">
+                </div>
+            </td>
+            <td>
+                <div class="row-actions">
+                    <button type="submit" form="gc-form-{{.ID}}" class="btn btn-ghost">{{index $.Messages "save"}}</button>
+                    <button hx-post="/admin/group-categories/{{.ID}}/delete" hx-confirm="Eliminare la categoria {{.Name}}?" hx-target="#group-categories-content" hx-swap="innerHTML" class="btn-danger">
+                        {{index $.Messages "delete"}}
+                    </button>
+                </div>
+            </td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+
+<form hx-post="/admin/group-categories" hx-target="#group-categories-content" hx-swap="innerHTML" class="field-row" style="margin-top:14px;">
+    <input type="text" name="name" placeholder="Nuova categoria (es. Settore VI - Legale)" class="input" required>
+    <select name="parent_id" class="input">
+        <option value="">Nessuna (primo livello)</option>
+        {{range .Categories}}
+        <option value="{{.ID}}">{{.Name}}</option>
+        {{end}}
+    </select>
+    <input type="text" name="range_start" placeholder="da" class="input" style="width:70px;">
+    <input type="text" name="range_end" placeholder="a" class="input" style="width:70px;">
+    <button type="submit" class="btn btn-primary" style="flex:none;">Aggiungi categoria</button>
+</form>

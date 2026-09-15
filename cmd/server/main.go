@@ -245,6 +245,10 @@ func main() {
 	admin.HandleFunc("/areas", handleAdminCreateArea).Methods("POST")
 	admin.HandleFunc("/areas/{id}", handleAdminRenameArea).Methods("POST")
 	admin.HandleFunc("/areas/{id}/delete", handleAdminDeleteArea).Methods("POST")
+	admin.HandleFunc("/group-categories", handleAdminGroupCategories).Methods("GET")
+	admin.HandleFunc("/group-categories", handleAdminCreateGroupCategory).Methods("POST")
+	admin.HandleFunc("/group-categories/{id}", handleAdminUpdateGroupCategory).Methods("POST")
+	admin.HandleFunc("/group-categories/{id}/delete", handleAdminDeleteGroupCategory).Methods("POST")
 	admin.HandleFunc("/local-contacts", handleAdminContacts).Methods("GET")
 	admin.HandleFunc("/local-contacts", handleAdminCreateContact).Methods("POST")
 	admin.HandleFunc("/local-contacts/{uid}", handleAdminUpdateContact).Methods("POST")
@@ -1205,6 +1209,121 @@ func handleAdminDeleteArea(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[ADMIN] Failed to delete area %d: %v", id, err)
 	}
 	renderAdminAreas(w, r)
+}
+
+// renderAdminGroupCategories re-renders solo il frammento (usato dopo
+// crea/modifica/elimina via HTMX) — stesso pattern di renderAdminAreas.
+func renderAdminGroupCategories(w http.ResponseWriter, r *http.Request) {
+	categories, err := db.ListGroupCategories()
+	if err != nil {
+		http.Error(w, "Failed to list group categories", http.StatusInternalServerError)
+		return
+	}
+
+	locale := i18n.ResolveLocale(r)
+	data := map[string]interface{}{
+		"Categories": categories,
+		"Messages":   i18n.GetMessages(locale),
+	}
+	templates.ExecuteTemplate(w, "admin_group_categories.html", data)
+}
+
+// handleAdminGroupCategories serve la pagina completa (navigazione
+// diretta) — le scritture continuano a ricevere solo il frammento via
+// renderAdminGroupCategories.
+func handleAdminGroupCategories(w http.ResponseWriter, r *http.Request) {
+	categories, err := db.ListGroupCategories()
+	if err != nil {
+		http.Error(w, "Failed to list group categories", http.StatusInternalServerError)
+		return
+	}
+
+	locale := i18n.ResolveLocale(r)
+	data := railData()
+	data["Categories"] = categories
+	data["Username"] = sessionAdminUsername(r)
+	data["Section"] = "admin-group-categories"
+	data["Messages"] = i18n.GetMessages(locale)
+
+	templates.ExecuteTemplate(w, "admin_page_group_categories.html", data)
+}
+
+// parseOptionalGroupCategoryInt legge un campo form numerico opzionale
+// (range_start/range_end/parent_id) — stringa vuota o non numerica torna
+// nil, stesso comportamento di SetAreaRange per i range delle Aree.
+func parseOptionalGroupCategoryInt(r *http.Request, field string) *int {
+	v := strings.TrimSpace(r.FormValue(field))
+	if v == "" {
+		return nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return nil
+	}
+	return &n
+}
+
+func handleAdminCreateGroupCategory(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		renderAdminGroupCategories(w, r)
+		return
+	}
+	key := slugify(name)
+	if key == "" {
+		renderAdminGroupCategories(w, r)
+		return
+	}
+
+	c := &database.GroupCategory{
+		Key:        key,
+		Name:       name,
+		RangeStart: parseOptionalGroupCategoryInt(r, "range_start"),
+		RangeEnd:   parseOptionalGroupCategoryInt(r, "range_end"),
+	}
+	if pid := parseOptionalGroupCategoryInt(r, "parent_id"); pid != nil {
+		id64 := int64(*pid)
+		c.ParentID = &id64
+	}
+	if err := db.CreateGroupCategory(c); err != nil {
+		log.Printf("[ADMIN] Failed to create group category %q: %v", name, err)
+	}
+	renderAdminGroupCategories(w, r)
+}
+
+func handleAdminUpdateGroupCategory(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id, _ := strconv.ParseInt(vars["id"], 10, 64)
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		renderAdminGroupCategories(w, r)
+		return
+	}
+
+	c := &database.GroupCategory{
+		ID:         id,
+		Name:       name,
+		RangeStart: parseOptionalGroupCategoryInt(r, "range_start"),
+		RangeEnd:   parseOptionalGroupCategoryInt(r, "range_end"),
+	}
+	if pid := parseOptionalGroupCategoryInt(r, "parent_id"); pid != nil {
+		id64 := int64(*pid)
+		c.ParentID = &id64
+	}
+	if err := db.UpdateGroupCategory(c); err != nil {
+		log.Printf("[ADMIN] Failed to update group category %d: %v", id, err)
+	}
+	renderAdminGroupCategories(w, r)
+}
+
+func handleAdminDeleteGroupCategory(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id, _ := strconv.ParseInt(vars["id"], 10, 64)
+
+	if err := db.DeleteGroupCategory(id); err != nil {
+		log.Printf("[ADMIN] Failed to delete group category %d: %v", id, err)
+	}
+	renderAdminGroupCategories(w, r)
 }
 
 // Contatti locali (manuali, extra-dominio) — CRUD separato dai contatti
