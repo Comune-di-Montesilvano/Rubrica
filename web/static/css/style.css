@@ -363,6 +363,18 @@ td.num { font-variant-numeric: tabular-nums; font-weight: 600; }
 .chevron { width: 14px; height: 14px; color: var(--muted); transition: transform .15s; flex: none; }
 .group-row-details[open] .chevron { transform: rotate(90deg); }
 
+/* --- Nodo categoria nella colonna "Chiamate di gruppo" (albero a 2
+   livelli, vedi group_category_node.html) --- */
+.group-category-details { border-bottom: 1px solid var(--line); }
+.group-category-details > summary {
+    list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px;
+    padding: 9px 4px; font-family: 'Archivo', sans-serif; font-weight: 600; font-size: 13.5px;
+}
+.group-category-details > summary::-webkit-details-marker { display: none; }
+.group-category-details[open] > summary .chevron { transform: rotate(90deg); }
+.group-category-children { padding-left: 18px; border-left: 1px solid var(--line); margin-left: 8px; }
+.group-category-children .group-row-details { border-bottom: none; }
+
 /* --- Responsive --- */
 
 @media (max-width: 768px) {

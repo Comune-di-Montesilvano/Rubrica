@@ -50,3 +50,64 @@ func TestGroupByDepartmentEmptyInput(t *testing.T) {
 		t.Errorf("got %d groups for nil input, want 0", len(groups))
 	}
 }
+
+func TestBuildGroupCategoryTree(t *testing.T) {
+	ufficiStart, ufficiEnd := 400, 499
+	settoreStart, settoreEnd := 401, 404
+	dirigentiStart, dirigentiEnd := 300, 350
+
+	uffici := &database.GroupCategory{ID: 1, Key: "uffici", Name: "Uffici", RangeStart: &ufficiStart, RangeEnd: &ufficiEnd}
+	settoreVI := &database.GroupCategory{ID: 2, Key: "settore_vi", Name: "Settore VI - Legale", ParentID: &uffici.ID, RangeStart: &settoreStart, RangeEnd: &settoreEnd}
+	dirigenti := &database.GroupCategory{ID: 3, Key: "dirigenti", Name: "Dirigenti", RangeStart: &dirigentiStart, RangeEnd: &dirigentiEnd}
+	// Categoria senza alcun gruppo assegnato: non deve comparire nell'albero.
+	vuota := &database.GroupCategory{ID: 4, Key: "vuota", Name: "Vuota"}
+
+	categories := []*database.GroupCategory{uffici, settoreVI, dirigenti, vuota}
+
+	groups := []*GroupWithMembers{
+		{Group: &database.GroupNumber{Number: "401", Name: "Servizio difesa legale"}},
+		{Group: &database.GroupNumber{Number: "405", Name: "Segretario Generale"}}, // in "Uffici" ma non in "Settore VI"
+		{Group: &database.GroupNumber{Number: "310", Name: "Dirigente Settore III"}},
+		{Group: &database.GroupNumber{Number: "900", Name: "COC"}}, // nessuna categoria
+	}
+
+	tree, uncategorized := BuildGroupCategoryTree(groups, categories)
+
+	if len(tree) != 2 {
+		t.Fatalf("got %d top-level nodes, want 2 (Dirigenti, Uffici)", len(tree))
+	}
+	// range_start crescente: Dirigenti (300) prima di Uffici (400).
+	if tree[0].Category.Key != "dirigenti" || tree[1].Category.Key != "uffici" {
+		t.Fatalf("top-level order = [%s, %s], want [dirigenti, uffici]", tree[0].Category.Key, tree[1].Category.Key)
+	}
+
+	dirigentiNode := tree[0]
+	if len(dirigentiNode.Children) != 0 {
+		t.Errorf("dirigenti should have no children, got %d", len(dirigentiNode.Children))
+	}
+	if len(dirigentiNode.Groups) != 1 || dirigentiNode.Groups[0].Group.Number != "310" {
+		t.Errorf("dirigenti.Groups = %v, want [310]", dirigentiNode.Groups)
+	}
+
+	ufficiNode := tree[1]
+	if len(ufficiNode.Groups) != 1 || ufficiNode.Groups[0].Group.Number != "405" {
+		t.Errorf("uffici.Groups = %v, want [405] (401 va nel figlio settore_vi)", ufficiNode.Groups)
+	}
+	if len(ufficiNode.Children) != 1 || ufficiNode.Children[0].Category.Key != "settore_vi" {
+		t.Fatalf("uffici.Children = %v, want [settore_vi]", ufficiNode.Children)
+	}
+	if len(ufficiNode.Children[0].Groups) != 1 || ufficiNode.Children[0].Groups[0].Group.Number != "401" {
+		t.Errorf("settore_vi.Groups = %v, want [401]", ufficiNode.Children[0].Groups)
+	}
+
+	if len(uncategorized) != 1 || uncategorized[0].Group.Number != "900" {
+		t.Fatalf("uncategorized = %v, want [900]", uncategorized)
+	}
+}
+
+func TestBuildGroupCategoryTreeEmptyInput(t *testing.T) {
+	tree, uncategorized := BuildGroupCategoryTree(nil, nil)
+	if len(tree) != 0 || len(uncategorized) != 0 {
+		t.Errorf("got tree=%v uncategorized=%v for nil input, want both empty", tree, uncategorized)
+	}
+}

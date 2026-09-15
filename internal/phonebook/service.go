@@ -170,6 +170,98 @@ type DepartmentGroup struct {
 // I gruppi sono sempre ordinati alfabeticamente per nome; i contatti
 // mantengono l'ordine di arrivo (i chiamanti passano risultati già
 // ordinati per display_name dalla query DB).
+// GroupCategoryNode è un nodo dell'albero di categorie per la colonna
+// "Chiamate di gruppo" (vedi
+// docs/superpowers/specs/2026-09-15-group-categories-hierarchy-design.md).
+// Category non è mai nil per i nodi dell'albero — i gruppi senza
+// categoria sono il secondo valore di ritorno di BuildGroupCategoryTree,
+// non un nodo con Category nil.
+type GroupCategoryNode struct {
+	Category *database.GroupCategory
+	Children []*GroupCategoryNode
+	Groups   []*GroupWithMembers
+}
+
+// BuildGroupCategoryTree raggruppa groups sotto la categoria più
+// specifica che copre il loro numero (database.MatchGroupCategory),
+// costruendo l'albero a partire dalla catena ParentID di ogni categoria
+// coinvolta. Una categoria senza alcun gruppo (diretto o nei discendenti)
+// non compare nell'albero — niente sezioni vuote. Figli e gruppi sono
+// ordinati per RangeStart/Number crescente ad ogni livello. I gruppi il
+// cui numero non cade in nessun range sono ritornati separatamente
+// (uncategorized) — il chiamante li mostra nel bucket "Altre chiamate".
+func BuildGroupCategoryTree(groups []*GroupWithMembers, categories []*database.GroupCategory) (tree []*GroupCategoryNode, uncategorized []*GroupWithMembers) {
+	nodes := make(map[int64]*GroupCategoryNode, len(categories))
+	for _, c := range categories {
+		nodes[c.ID] = &GroupCategoryNode{Category: c}
+	}
+
+	used := make(map[int64]bool, len(categories))
+	for _, g := range groups {
+		leaf := database.MatchGroupCategory(g.Group.Number, categories)
+		if leaf == nil {
+			uncategorized = append(uncategorized, g)
+			continue
+		}
+		nodes[leaf.ID].Groups = append(nodes[leaf.ID].Groups, g)
+		used[leaf.ID] = true
+	}
+
+	// Marca come "usata" ogni categoria che ha un discendente usato,
+	// risalendo la catena — altrimenti un genitore con figli popolati ma
+	// senza gruppi propri (es. "Uffici" con solo "Settore VI" popolato)
+	// verrebbe scartato insieme al figlio.
+	for id := range used {
+		c := nodes[id].Category
+		for c.ParentID != nil {
+			used[*c.ParentID] = true
+			c = nodes[*c.ParentID].Category
+		}
+	}
+
+	var roots []*GroupCategoryNode
+	for _, c := range categories {
+		if !used[c.ID] {
+			continue
+		}
+		node := nodes[c.ID]
+		if c.ParentID == nil {
+			roots = append(roots, node)
+			continue
+		}
+		parent, ok := nodes[*c.ParentID]
+		if !ok {
+			roots = append(roots, node) // genitore inesistente/orfano: tratta come radice
+			continue
+		}
+		parent.Children = append(parent.Children, node)
+	}
+
+	sortNodes(roots)
+	return roots, uncategorized
+}
+
+// sortNodes ordina un livello di nodi per RangeStart crescente (nil per
+// ultimo) e ricorre sui figli — stesso criterio di ListGroupCategories.
+func sortNodes(nodes []*GroupCategoryNode) {
+	sort.SliceStable(nodes, func(i, j int) bool {
+		a, b := nodes[i].Category.RangeStart, nodes[j].Category.RangeStart
+		if a == nil {
+			return false
+		}
+		if b == nil {
+			return true
+		}
+		return *a < *b
+	})
+	for _, n := range nodes {
+		sortNodes(n.Children)
+		sort.SliceStable(n.Groups, func(i, j int) bool {
+			return n.Groups[i].Group.Number < n.Groups[j].Group.Number
+		})
+	}
+}
+
 func GroupByDepartment(contacts []*ContactWithGroups) []*DepartmentGroup {
 	index := make(map[string]int)
 	groups := make([]*DepartmentGroup, 0)
