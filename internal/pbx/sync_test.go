@@ -67,6 +67,29 @@ func TestApplyPeersSoftDeletesDisappearedPeers(t *testing.T) {
 	}
 }
 
+func TestApplyPeersFallsBackToGroupCategoryDepartment(t *testing.T) {
+	db := newTestDB(t)
+	start, end := 250, 299
+	if err := db.CreateGroupCategory(&database.GroupCategory{Key: "politica", Name: "Politica", RangeStart: &start, RangeEnd: &end}); err != nil {
+		t.Fatalf("CreateGroupCategory failed: %v", err)
+	}
+
+	if _, err := ApplyPeers(db, []Peer{{Extension: "282", CallerID: "RICCARDO ROSSI"}}, time.Now()); err != nil {
+		t.Fatalf("ApplyPeers failed: %v", err)
+	}
+
+	got, err := db.GetContact("pbx-282")
+	if err != nil || got == nil {
+		t.Fatalf("peer 282 doveva diventare un contatto pbx: %v", err)
+	}
+	if got.Department != "Politica" {
+		t.Errorf("Department = %q, want %q (dalla categoria chiamate, non piu' \"Centralino - non mappato\")", got.Department, "Politica")
+	}
+	if got.Area != "" {
+		t.Errorf("Area = %q, want vuota — la categoria chiamate non assegna mai contacts.area", got.Area)
+	}
+}
+
 func TestApplyCallGroupsCreatesAndLinksMembers(t *testing.T) {
 	db := newTestDB(t)
 	if err := db.UpsertContact(&database.Contact{UID: "u1", DisplayName: "U1", LDAPExt: "700", LastSync: time.Now()}); err != nil {

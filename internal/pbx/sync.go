@@ -435,6 +435,18 @@ func ApplyPeers(db *database.DB, peers []Peer, syncTime time.Time) (int, error) 
 		log.Printf("[PBX] Failed to list areas for range matching: %v", err)
 	}
 
+	// Fallback sulle categorie chiamate (vedi /admin/group-categories) per
+	// il solo reparto (mai per Area, concetto separato — vedi CLAUDE.md):
+	// un peer che non cade in nessun range di Area ma cade nel range di
+	// una categoria chiamate (es. "Politica") prende il nome categoria
+	// come reparto invece del generico "Centralino - non mappato" — non
+	// ha senso restare "non mappato" se il centralino sa già a quale
+	// chiamata di gruppo appartiene quell'interno.
+	categories, err := db.ListGroupCategories()
+	if err != nil {
+		log.Printf("[PBX] Failed to list group categories for range matching: %v", err)
+	}
+
 	applied := 0
 	for _, p := range peers {
 		if _, ok := inDomain[p.Extension]; ok {
@@ -451,6 +463,8 @@ func ApplyPeers(db *database.DB, peers []Peer, syncTime time.Time) (int, error) 
 		if a := database.MatchExtensionRange(p.Extension, areas); a != nil {
 			area = a.Key
 			department = a.Name
+		} else if c := database.MatchGroupCategory(p.Extension, categories); c != nil {
+			department = c.Name
 		}
 		c := &database.Contact{
 			UID:           "pbx-" + p.Extension,
