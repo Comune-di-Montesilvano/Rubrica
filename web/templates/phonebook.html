@@ -41,10 +41,37 @@
         </main>
     </div>
 
+    <div id="contact-modal" class="modal-overlay" hidden onclick="if(event.target===this)this.setAttribute('hidden','')">
+        <div class="modal-box">
+            <div class="modal-box-head">
+                <h3>Dettaglio contatto</h3>
+                <button onclick="document.getElementById('contact-modal').setAttribute('hidden','')">&times;</button>
+            </div>
+            <div id="contact-modal-content"></div>
+        </div>
+    </div>
+
     <script>
         function setActiveArea(btn) {
             document.querySelectorAll('.rail-item').forEach(function (i) { i.classList.remove('active'); });
             btn.classList.add('active');
+        }
+        // focusGroupRow apre la riga del gruppo (e ogni categoria annidata
+        // che la contiene, risalendo la catena) e la scrolla in vista —
+        // usata dal dropdown di ricerca sopra "Chiamate di gruppo".
+        function focusGroupRow(number) {
+            document.querySelectorAll('.group-search-dropdown').forEach(function (d) { d.style.display = 'none'; });
+            var el = document.getElementById('group-' + number);
+            if (!el) return;
+            el.open = true;
+            var parent = el.parentElement;
+            while (parent) {
+                var details = parent.closest('details.group-category-details, details.dept');
+                if (!details) break;
+                details.open = true;
+                parent = details.parentElement;
+            }
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
         function toggleAllGroups() {
             var details = document.querySelectorAll('#search-results details.dept');
