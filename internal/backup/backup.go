@@ -8,6 +8,7 @@ package backup
 import (
 	"database/sql"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -156,4 +157,32 @@ func PruneScheduled(backups []*BackupFile, now time.Time) ([]*BackupFile, error)
 	}
 
 	return deleted, nil
+}
+
+// sqliteHeaderMagic sono i primi 16 byte di ogni file SQLite valido
+// (https://www.sqlite.org/fileformat.html#the_database_header).
+var sqliteHeaderMagic = []byte("SQLite format 3\x00")
+
+// ValidateSQLiteHeader legge i primi 16 byte di path e verifica l'header
+// SQLite — usata prima di accettare un file caricato come ripristino,
+// per rifiutare subito un file non-SQLite senza tentare di aprirlo come
+// DB (che con go-sqlite3 potrebbe anche "riuscire" silenziosamente su un
+// file vuoto/malformato, creando confusione).
+func ValidateSQLiteHeader(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("failed to open file: %w", err)
+	}
+	defer f.Close()
+
+	header := make([]byte, len(sqliteHeaderMagic))
+	if _, err := io.ReadFull(f, header); err != nil {
+		return fmt.Errorf("failed to read file header: %w", err)
+	}
+	for i, b := range sqliteHeaderMagic {
+		if header[i] != b {
+			return fmt.Errorf("file does not have a valid SQLite header")
+		}
+	}
+	return nil
 }

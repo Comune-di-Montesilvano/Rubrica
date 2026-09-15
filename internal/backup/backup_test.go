@@ -214,3 +214,34 @@ func TestPruneScheduledNeverTouchesManual(t *testing.T) {
 		t.Errorf("manual backup file should still exist: %v", err)
 	}
 }
+
+func TestValidateSQLiteHeaderAcceptsRealDB(t *testing.T) {
+	db := newTestSQLDB(t)
+	dir := t.TempDir()
+	b, err := CreateBackup(db.DB, dir, false)
+	if err != nil {
+		t.Fatalf("CreateBackup failed: %v", err)
+	}
+
+	if err := ValidateSQLiteHeader(b.Path); err != nil {
+		t.Errorf("ValidateSQLiteHeader on a real backup file failed: %v", err)
+	}
+}
+
+func TestValidateSQLiteHeaderRejectsGarbage(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "not-a-db.db")
+	if err := os.WriteFile(path, []byte("this is definitely not a sqlite file"), 0o644); err != nil {
+		t.Fatalf("failed to write garbage file: %v", err)
+	}
+
+	if err := ValidateSQLiteHeader(path); err == nil {
+		t.Error("ValidateSQLiteHeader should reject a non-SQLite file")
+	}
+}
+
+func TestValidateSQLiteHeaderRejectsMissingFile(t *testing.T) {
+	if err := ValidateSQLiteHeader(filepath.Join(t.TempDir(), "nonexistent.db")); err == nil {
+		t.Error("ValidateSQLiteHeader should error on a missing file")
+	}
+}
