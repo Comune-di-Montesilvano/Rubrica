@@ -209,6 +209,37 @@ func TestGroupCategoryGetMissing(t *testing.T) {
 	}
 }
 
+func TestMatchGroupCategoryPrefersNarrowestRange(t *testing.T) {
+	parentStart, parentEnd := 400, 499
+	childStart, childEnd := 401, 404
+	parent := &GroupCategory{ID: 1, Key: "uffici", Name: "Uffici", RangeStart: &parentStart, RangeEnd: &parentEnd}
+	child := &GroupCategory{ID: 2, Key: "settore_vi", Name: "Settore VI - Legale", ParentID: &parent.ID, RangeStart: &childStart, RangeEnd: &childEnd}
+
+	// Ordine deliberatamente "genitore prima" nello slice, per verificare
+	// che vinca comunque il range più stretto e non il primo dell'elenco.
+	categories := []*GroupCategory{parent, child}
+
+	got := MatchGroupCategory("401", categories)
+	if got == nil || got.ID != child.ID {
+		t.Fatalf("MatchGroupCategory(401) = %v, want child (id=2, range più stretto)", got)
+	}
+
+	got = MatchGroupCategory("450", categories)
+	if got == nil || got.ID != parent.ID {
+		t.Fatalf("MatchGroupCategory(450) = %v, want parent (fuori dal range del figlio)", got)
+	}
+
+	got = MatchGroupCategory("999", categories)
+	if got != nil {
+		t.Fatalf("MatchGroupCategory(999) = %v, want nil (nessun range copre 999)", got)
+	}
+
+	got = MatchGroupCategory("not-a-number", categories)
+	if got != nil {
+		t.Fatalf("MatchGroupCategory(non numerico) = %v, want nil", got)
+	}
+}
+
 func TestGroupCategoryCRUD(t *testing.T) {
 	db := newTestDB(t)
 

@@ -957,6 +957,36 @@ func MatchExtensionRange(ext string, areas []*Area) *Area {
 	return nil
 }
 
+// MatchGroupCategory ritorna la group_category più specifica (range più
+// stretto) il cui [RangeStart, RangeEnd] contiene ext — a differenza di
+// MatchExtensionRange (che ritorna il primo match nell'ordine di lista e
+// non gestisce gerarchie), qui più categorie annidate possono coprire lo
+// stesso interno: vince quella col range più stretto, indipendentemente
+// dall'ordine di iterazione. Nil se ext non è numerico o nessuna regola
+// lo copre.
+func MatchGroupCategory(ext string, categories []*GroupCategory) *GroupCategory {
+	n, err := strconv.Atoi(ext)
+	if err != nil {
+		return nil
+	}
+	var best *GroupCategory
+	bestWidth := -1
+	for _, c := range categories {
+		if c.RangeStart == nil || c.RangeEnd == nil {
+			continue
+		}
+		if n < *c.RangeStart || n > *c.RangeEnd {
+			continue
+		}
+		width := *c.RangeEnd - *c.RangeStart
+		if best == nil || width < bestWidth {
+			best = c
+			bestWidth = width
+		}
+	}
+	return best
+}
+
 // ListGroupCategories returns all group categories, ordinate per
 // range_start crescente (NULL per ultimo) poi per nome — stesso criterio
 // usato per l'ordinamento a display-time nell'albero pubblico.
