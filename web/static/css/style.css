@@ -115,7 +115,6 @@ a { color: inherit; }
 .rail-foot a { color: var(--danger); text-decoration: none; }
 
 .rail-meta { display: flex; align-items: center; gap: 8px; padding: 10px 20px; font-size: 11px; color: var(--muted); }
-.rail-status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); flex: 0 0 7px; }
 .rail-version { margin-left: auto; display: flex; align-items: center; gap: 4px; color: var(--muted); text-decoration: none; }
 .rail-version:hover { color: var(--ink); }
 

@@ -1,6 +1,7 @@
 services:
   rubrica:
     image: ghcr.io/comune-di-montesilvano/rubrica:latest
+    pull_policy: always
     build:
       context: .
       dockerfile: Dockerfile

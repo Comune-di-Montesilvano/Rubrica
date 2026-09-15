@@ -95,6 +95,22 @@ type GroupWithMembers struct {
 	Members []*database.Contact
 }
 
+// ActiveMembers filtra Members ai soli contatti disabled=false — la rubrica
+// pubblica non deve mai mostrare un nominativo il cui account AD è
+// disattivato, anche se il centralino (fonte di verità sui membri del
+// gruppo) lo considera ancora appartenente al gruppo di chiamata. Le
+// schermate admin (gestione gruppi) continuano a usare Members senza
+// filtro: lì serve vedere anche i membri disattivi per poterli rimuovere.
+func (g *GroupWithMembers) ActiveMembers() []*database.Contact {
+	active := make([]*database.Contact, 0, len(g.Members))
+	for _, m := range g.Members {
+		if !m.Disabled {
+			active = append(active, m)
+		}
+	}
+	return active
+}
+
 // GetGroupWithMembers retrieves a group with all its members
 func (s *Service) GetGroupWithMembers(id int64) (*GroupWithMembers, error) {
 	group, err := s.db.GetGroup(id)

@@ -1356,6 +1356,7 @@ func pbxData(r *http.Request) map[string]interface{} {
 	data["UnmappedContacts"] = pbxUnmappedContacts()
 	data["NameMismatches"] = lastPBXSyncResult.Mismatches
 	data["ReclaimableExtensions"] = lastPBXSyncResult.Reclaimable
+	data["DisabledGroupMembers"] = lastPBXSyncResult.DisabledGroupMembers
 	if dups, err := db.ListDuplicateExtensions(); err != nil {
 		log.Printf("[ADMIN] Failed to list duplicate extensions: %v", err)
 	} else {
