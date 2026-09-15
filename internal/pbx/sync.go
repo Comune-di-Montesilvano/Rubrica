@@ -263,16 +263,29 @@ type DisabledGroupMember struct {
 // l'anagrafica interni disabilitati in dominio e segnala quelli disattivi —
 // va chiamato sui call group già filtrati (stesso punto di
 // FindNameMismatches/FindReclaimableExtensions), prima di ApplyCallGroups.
+// Un interno può comparire sia tra i disabilitati sia tra gli attivi
+// (numero riassegnato senza ripulire il vecchio titolare in AD — vedi
+// database.DuplicateExtension): in quel caso NON va segnalato, perché
+// GetContactByExtension (usata da ApplyCallGroups per risolvere i membri)
+// preferisce già il contatto attivo, quindi il gruppo squilla comunque sul
+// titolare giusto.
 func FindDisabledGroupMembers(db *database.DB, groups []CallGroup) ([]DisabledGroupMember, error) {
 	disabledNames, err := db.ListDisabledLDAPExtensionNames()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list disabled ldap extension names: %w", err)
+	}
+	activeNames, err := db.ListActiveLDAPExtensionNames()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list active ldap extension names: %w", err)
 	}
 	var flagged []DisabledGroupMember
 	for _, g := range groups {
 		for _, ext := range g.Members {
 			domainName, ok := disabledNames[ext]
 			if !ok {
+				continue
+			}
+			if _, alsoActive := activeNames[ext]; alsoActive {
 				continue
 			}
 			flagged = append(flagged, DisabledGroupMember{
@@ -286,6 +299,33 @@ func FindDisabledGroupMembers(db *database.DB, groups []CallGroup) ([]DisabledGr
 	return flagged, nil
 }
 
+// EmptyActiveGroup segnala un gruppo di chiamata con membri lato centralino
+// ma nessuno di essi attivo in dominio — il gruppo risulta "0 membri" nella
+// rubrica pubblica (che nasconde i membri disabled, vedi ActiveMembers in
+// handleSearch) pur non essendo un gruppo genuinamente vuoto: va sistemato
+// (membri da riassegnare), non è un errore transitorio di sync.
+type EmptyActiveGroup struct {
+	GroupNumber string
+	GroupName   string
+}
+
+// FindEmptyActiveGroups interroga il DB (dopo ApplyCallGroups, quindi sui
+// membri già risolti e persistiti) per i gruppi con membri ma nessuno
+// attivo — a differenza delle altre diagnostiche in questo file, non lavora
+// sui dati grezzi del centralino: serve lo stato applicato in
+// group_members per sapere quali contact_id sono davvero disabled.
+func FindEmptyActiveGroups(db *database.DB) ([]EmptyActiveGroup, error) {
+	groups, err := db.ListEmptyActiveGroups()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list empty active groups: %w", err)
+	}
+	empty := make([]EmptyActiveGroup, 0, len(groups))
+	for _, g := range groups {
+		empty = append(empty, EmptyActiveGroup{GroupNumber: g.Number, GroupName: g.Name})
+	}
+	return empty, nil
+}
+
 // SyncResult raccoglie le diagnostiche calcolate durante un giro di sync,
 // oltre all'applicazione vera e propria dei dati — mostrate dalla pagina
 // admin /admin/pbx per aiutare a tenere allineati centralino e dominio.
@@ -293,6 +333,7 @@ type SyncResult struct {
 	Mismatches           []NameMismatch
 	Reclaimable          []ReclaimableExtension
 	DisabledGroupMembers []DisabledGroupMember
+	EmptyActiveGroups    []EmptyActiveGroup
 }
 
 // SyncPBX esegue un giro completo di sync (login, fetch, filtra, applica).
@@ -361,6 +402,10 @@ func SyncPBX(db *database.DB, onPhase func(phase string)) (SyncResult, error) {
 
 	if err := ApplyCallGroups(db, groups); err != nil {
 		return result, fmt.Errorf("pbx apply call groups failed: %w", err)
+	}
+
+	if result.EmptyActiveGroups, err = FindEmptyActiveGroups(db); err != nil {
+		log.Printf("[PBX] Failed to compute empty active groups: %v", err)
 	}
 
 	log.Printf("[PBX] Sync completed: %d peers applied, %d call groups, %d name mismatches, %d reclaimable extensions",

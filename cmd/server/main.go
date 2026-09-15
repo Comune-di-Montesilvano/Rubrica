@@ -431,13 +431,28 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		allGroups, err := pbService.ListGroupsWithMembers()
 		if err != nil {
 			log.Printf("[SEARCH] Failed to list call groups: %v", err)
-		} else if query == "" {
-			callGroups = allGroups
 		} else {
-			q := strings.ToLower(query)
+			// Un gruppo con soli membri disabled=true ha ActiveMembers()
+			// vuoto (vedi phonebook.ActiveMembers) anche se il centralino
+			// lo considera pieno — pbx.Filters.ExcludeEmptyGroups non lo
+			// intercetta perché valuta i membri grezzi PBX, non lo stato
+			// dominio, quindi va filtrato qui in rubrica pubblica.
+			nonEmpty := allGroups[:0]
 			for _, g := range allGroups {
-				if strings.Contains(strings.ToLower(g.Group.Name), q) || strings.Contains(g.Group.Number, q) {
-					callGroups = append(callGroups, g)
+				if len(g.ActiveMembers()) > 0 {
+					nonEmpty = append(nonEmpty, g)
+				}
+			}
+			allGroups = nonEmpty
+
+			if query == "" {
+				callGroups = allGroups
+			} else {
+				q := strings.ToLower(query)
+				for _, g := range allGroups {
+					if strings.Contains(strings.ToLower(g.Group.Name), q) || strings.Contains(g.Group.Number, q) {
+						callGroups = append(callGroups, g)
+					}
 				}
 			}
 		}
@@ -1357,6 +1372,7 @@ func pbxData(r *http.Request) map[string]interface{} {
 	data["NameMismatches"] = lastPBXSyncResult.Mismatches
 	data["ReclaimableExtensions"] = lastPBXSyncResult.Reclaimable
 	data["DisabledGroupMembers"] = lastPBXSyncResult.DisabledGroupMembers
+	data["EmptyActiveGroups"] = lastPBXSyncResult.EmptyActiveGroups
 	if dups, err := db.ListDuplicateExtensions(); err != nil {
 		log.Printf("[ADMIN] Failed to list duplicate extensions: %v", err)
 	} else {

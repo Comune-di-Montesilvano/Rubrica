@@ -1,4 +1,5 @@
 {{if .CallGroups}}
+<div class="results-groups">
 <details class="dept" open>
     <summary class="dept-head">
         <span class="dept-name">Chiamate di gruppo</span>
@@ -43,7 +44,9 @@
     {{end}}
 </details>
 {{end}}
+</div>
 
+<div class="results-contacts">
 {{if .Groups}}
 {{range .Groups}}
 <details class="dept" open>
@@ -100,3 +103,4 @@
 </div>
 {{end}}
 {{end}}
+</div>

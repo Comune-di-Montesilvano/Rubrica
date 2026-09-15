@@ -504,17 +504,22 @@ func (db *DB) ListDomainExtensions() ([]string, error) {
 	return exts, rows.Err()
 }
 
-// GetContactByExtension returns the first active contact (qualunque
-// source) il cui ldap_ext contiene l'interno dato — usato per risolvere i
-// membri "SIP/xxx" di un call group PBX a un contact_id. Il confronto è
-// per token (";"-separati), non uguaglianza esatta: un contatto con più
-// interni ("700;701") deve risolvere su entrambi.
+// GetContactByExtension returns il contatto (qualunque source) il cui
+// ldap_ext contiene l'interno dato — usato per risolvere i membri
+// "SIP/xxx" di un call group PBX a un contact_id. Il confronto è per token
+// (";"-separati), non uguaglianza esatta: un contatto con più interni
+// ("700;701") deve risolvere su entrambi. Se l'interno è condiviso da più
+// contatti (numero riassegnato senza ripulire il vecchio titolare in AD —
+// vedi DuplicateExtension) preferisce quello attivo: "ORDER BY disabled"
+// mette prima le righe disabled=0, così il gruppo si aggancia al
+// nominativo giusto invece che a un ex titolare disabilitato.
 func (db *DB) GetContactByExtension(ext string) (*Contact, error) {
 	query := `
 	SELECT id, uid, display_name, email, ldap_ext, primary_number, department, title, description, ldap_groups, ldap_dn, area, source, disabled, manual_override, deleted_at, last_sync, created_at, updated_at
 	FROM contacts
 	WHERE deleted_at IS NULL
 	AND (';' || ldap_ext || ';') LIKE ('%;' || ? || ';%')
+	ORDER BY disabled ASC, id ASC
 	LIMIT 1
 	`
 	contact := &Contact{}
@@ -791,6 +796,40 @@ func (db *DB) ListActiveLDAPExtensionNames() (map[string]string, error) {
 // per essere riassegnato).
 func (db *DB) ListDisabledLDAPExtensionNames() (map[string]string, error) {
 	return db.listLDAPExtensionNames(true)
+}
+
+// ListEmptyActiveGroups trova i gruppi di chiamata che HANNO membri
+// (group_members non vuoto) ma NESSUNO di essi è un contatto attivo
+// (disabled=0, non soft-deleted) — il gruppo è quindi invisibile nella
+// rubrica pubblica (vedi phonebook.GroupWithMembers.ActiveMembers, filtrato
+// anche lato handleSearch) pur avendo membri lato centralino: "da
+// sistemare", non uno stato transitorio del sync.
+func (db *DB) ListEmptyActiveGroups() ([]*GroupNumber, error) {
+	rows, err := db.Query(`
+	SELECT g.id, g.number, g.name, g.description, g.source, g.name_override, g.area, g.created_at, g.updated_at
+	FROM group_numbers g
+	WHERE EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = g.id)
+	AND NOT EXISTS (
+		SELECT 1 FROM group_members gm
+		INNER JOIN contacts c ON c.id = gm.contact_id
+		WHERE gm.group_id = g.id AND c.disabled = 0 AND c.deleted_at IS NULL
+	)
+	ORDER BY g.number
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list empty active groups: %w", err)
+	}
+	defer rows.Close()
+
+	var groups []*GroupNumber
+	for rows.Next() {
+		g := &GroupNumber{}
+		if err := rows.Scan(&g.ID, &g.Number, &g.Name, &g.Description, &g.Source, &g.NameOverride, &g.Area, &g.CreatedAt, &g.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan empty active group: %w", err)
+		}
+		groups = append(groups, g)
+	}
+	return groups, rows.Err()
 }
 
 // DuplicateExtension segnala un interno condiviso da più contatti attivi
