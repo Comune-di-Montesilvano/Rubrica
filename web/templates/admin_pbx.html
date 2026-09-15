@@ -193,3 +193,32 @@
     <p class="helptext" style="text-align:center;padding:16px 0;">Nessun membro disattivo da segnalare.</p>
     {{end}}
 </div>
+
+<div class="card" style="margin-top:16px;">
+    <h3>Gruppi senza membri attivi</h3>
+    <div class="helptext" style="margin-bottom:10px;">
+        Gruppo di chiamata con membri lato centralino, ma nessuno attivo in dominio — risulta "0 membri" nella rubrica pubblica pur non essendo un gruppo davvero vuoto. Da sistemare: riassegnare i membri. Calcolato all'ultimo sync PBX riuscito.
+    </div>
+    {{if .EmptyActiveGroups}}
+    <div class="modal-scroll-x">
+    <table>
+        <thead>
+            <tr>
+                <th>Interno</th>
+                <th>Nome gruppo</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .EmptyActiveGroups}}
+            <tr>
+                <td class="num">{{.GroupNumber}}</td>
+                <td>{{.GroupName}}</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    </div>
+    {{else}}
+    <p class="helptext" style="text-align:center;padding:16px 0;">Nessun gruppo senza membri attivi da segnalare.</p>
+    {{end}}
+</div>
