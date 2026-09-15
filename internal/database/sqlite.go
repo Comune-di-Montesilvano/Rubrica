@@ -998,6 +998,85 @@ func (db *DB) GetGroupCategory(id int64) (*GroupCategory, error) {
 	return c, nil
 }
 
+// CreateGroupCategory inserts a new group category. Key must be unique.
+func (db *DB) CreateGroupCategory(c *GroupCategory) error {
+	now := time.Now()
+	c.CreatedAt = now
+	c.UpdatedAt = now
+
+	result, err := db.Exec(`
+	INSERT INTO group_categories (key, name, parent_id, range_start, range_end, created_at, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, c.Key, c.Name, c.ParentID, c.RangeStart, c.RangeEnd, c.CreatedAt, c.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("failed to create group category: %w", err)
+	}
+	id, _ := result.LastInsertId()
+	c.ID = id
+	return nil
+}
+
+// groupCategoryCreatesCycle risale la catena parent_id partendo da
+// candidateParent e ritorna true se incontra targetID — cioè se
+// assegnare candidateParent come genitore di targetID creerebbe un
+// ciclo (incluso il caso candidateParent == targetID, auto-genitore).
+func (db *DB) groupCategoryCreatesCycle(targetID, candidateParent int64) (bool, error) {
+	current := candidateParent
+	for {
+		if current == targetID {
+			return true, nil
+		}
+		var parentID sql.NullInt64
+		err := db.QueryRow(`SELECT parent_id FROM group_categories WHERE id = ?`, current).Scan(&parentID)
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("failed to walk group category parent chain: %w", err)
+		}
+		if !parentID.Valid {
+			return false, nil
+		}
+		current = parentID.Int64
+	}
+}
+
+// UpdateGroupCategory aggiorna nome, genitore e range insieme. Rifiuta un
+// parent_id che creerebbe un ciclo (una categoria genitore di se stessa,
+// direttamente o attraverso la catena).
+func (db *DB) UpdateGroupCategory(c *GroupCategory) error {
+	if c.ParentID != nil {
+		cycle, err := db.groupCategoryCreatesCycle(c.ID, *c.ParentID)
+		if err != nil {
+			return err
+		}
+		if cycle {
+			return fmt.Errorf("parent_id %d would create a cycle for group category %d", *c.ParentID, c.ID)
+		}
+	}
+	_, err := db.Exec(`
+	UPDATE group_categories SET name = ?, parent_id = ?, range_start = ?, range_end = ?, updated_at = ?
+	WHERE id = ?
+	`, c.Name, c.ParentID, c.RangeStart, c.RangeEnd, time.Now(), c.ID)
+	if err != nil {
+		return fmt.Errorf("failed to update group category: %w", err)
+	}
+	return nil
+}
+
+// DeleteGroupCategory removes a group category and orphans any child
+// (parent_id -> NULL, i figli restano ma tornano di primo livello)
+// invece di lasciare un riferimento pendente.
+func (db *DB) DeleteGroupCategory(id int64) error {
+	if _, err := db.Exec(`UPDATE group_categories SET parent_id = NULL WHERE parent_id = ?`, id); err != nil {
+		return fmt.Errorf("failed to orphan child group categories: %w", err)
+	}
+	if _, err := db.Exec(`DELETE FROM group_categories WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("failed to delete group category: %w", err)
+	}
+	return nil
+}
+
 // CreateArea inserts a new area. Key must be unique (usato come valore di
 // contacts.area e come chiave nel mapping OU->Area).
 func (db *DB) CreateArea(a *Area) error {

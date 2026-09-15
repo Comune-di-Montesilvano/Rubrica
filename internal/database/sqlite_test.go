@@ -209,6 +209,79 @@ func TestGroupCategoryGetMissing(t *testing.T) {
 	}
 }
 
+func TestGroupCategoryCRUD(t *testing.T) {
+	db := newTestDB(t)
+
+	parent := &GroupCategory{Key: "uffici", Name: "Uffici"}
+	if err := db.CreateGroupCategory(parent); err != nil {
+		t.Fatalf("CreateGroupCategory (parent) failed: %v", err)
+	}
+	if parent.ID == 0 {
+		t.Fatal("CreateGroupCategory did not set ID")
+	}
+
+	start, end := 401, 404
+	child := &GroupCategory{Key: "settore_vi", Name: "Settore VI - Legale", ParentID: &parent.ID, RangeStart: &start, RangeEnd: &end}
+	if err := db.CreateGroupCategory(child); err != nil {
+		t.Fatalf("CreateGroupCategory (child) failed: %v", err)
+	}
+
+	child.Name = "Settore VI - Legale (rinominato)"
+	if err := db.UpdateGroupCategory(child); err != nil {
+		t.Fatalf("UpdateGroupCategory failed: %v", err)
+	}
+	got, err := db.GetGroupCategory(child.ID)
+	if err != nil {
+		t.Fatalf("GetGroupCategory failed: %v", err)
+	}
+	if got.Name != "Settore VI - Legale (rinominato)" {
+		t.Errorf("Name = %q, want rinominato", got.Name)
+	}
+	if got.ParentID == nil || *got.ParentID != parent.ID {
+		t.Errorf("ParentID = %v, want %d", got.ParentID, parent.ID)
+	}
+
+	if err := db.DeleteGroupCategory(parent.ID); err != nil {
+		t.Fatalf("DeleteGroupCategory (parent) failed: %v", err)
+	}
+	got, _ = db.GetGroupCategory(child.ID)
+	if got == nil {
+		t.Fatal("child should still exist after parent deletion")
+	}
+	if got.ParentID != nil {
+		t.Errorf("child.ParentID = %v after parent deletion, want nil (orphaned)", got.ParentID)
+	}
+}
+
+func TestGroupCategoryUpdateRejectsCycle(t *testing.T) {
+	db := newTestDB(t)
+
+	a := &GroupCategory{Key: "a", Name: "A"}
+	if err := db.CreateGroupCategory(a); err != nil {
+		t.Fatalf("CreateGroupCategory a failed: %v", err)
+	}
+	b := &GroupCategory{Key: "b", Name: "B", ParentID: &a.ID}
+	if err := db.CreateGroupCategory(b); err != nil {
+		t.Fatalf("CreateGroupCategory b failed: %v", err)
+	}
+
+	// a -> parent b creerebbe un ciclo (b è già figlio di a).
+	a.ParentID = &b.ID
+	if err := db.UpdateGroupCategory(a); err == nil {
+		t.Fatal("UpdateGroupCategory should reject a cycle (a -> b -> a)")
+	}
+
+	// una categoria non può essere genitore di se stessa.
+	selfRef := &GroupCategory{Key: "c", Name: "C"}
+	if err := db.CreateGroupCategory(selfRef); err != nil {
+		t.Fatalf("CreateGroupCategory c failed: %v", err)
+	}
+	selfRef.ParentID = &selfRef.ID
+	if err := db.UpdateGroupCategory(selfRef); err == nil {
+		t.Fatal("UpdateGroupCategory should reject self-parenting")
+	}
+}
+
 func TestAreaCRUD(t *testing.T) {
 	db := newTestDB(t)
 
