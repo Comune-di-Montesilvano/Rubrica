@@ -9,7 +9,7 @@
 <body>
     <div class="login-shell">
         <div class="login-card">
-            <h1 class="login-title">{{index .Messages "app_title"}}</h1>
+            <h1 class="login-title"><img src="/static/img/logo-comune.png" alt="" width="30" height="30"><span>{{index .Messages "app_title"}}</span></h1>
             <form method="POST" action="/login">
                 <div class="login-field">
                     <label for="username">{{index .Messages "username"}}</label>
