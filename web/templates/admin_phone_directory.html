@@ -1,0 +1,47 @@
+<div class="card">
+    <h3>Server LDAP</h3>
+    <div class="helptext" style="margin-bottom:10px;">
+        {{if not .Enabled}}Disattivato (LDAP_SERVER_ENABLED=false).
+        {{else if .Listening}}In ascolto sulla porta {{.Port}}.
+        {{else}}Non in ascolto{{if .ListenError}}: {{.ListenError}}{{else}}: controllare i log del container ([LDAPSRV]){{end}}.{{end}}
+        {{if not .HasPassword}}<br><strong>Nessuna password impostata: ogni accesso dei telefoni viene rifiutato.</strong>{{end}}
+    </div>
+    {{if .Error}}<div class="helptext" style="color:var(--danger, #b42318);margin-bottom:10px;">{{.Error}}</div>{{end}}
+    {{if .Saved}}<div class="helptext" style="margin-bottom:10px;">Configurazione salvata.</div>{{end}}
+    <form hx-post="/admin/phone-directory" hx-target="#phone-directory-content" hx-swap="innerHTML" style="display:flex;flex-direction:column;gap:10px;">
+        <div>
+            <div class="helptext" style="margin-bottom:4px;">Base DN</div>
+            <input type="text" name="base_dn" value="{{.BaseDN}}" class="input" style="width:100%;">
+        </div>
+        <div>
+            <div class="helptext" style="margin-bottom:4px;">Utente (bind DN)</div>
+            <input type="text" name="bind_dn" value="{{.BindDN}}" autocomplete="off" class="input" style="width:100%;">
+        </div>
+        <div>
+            <div class="helptext" style="margin-bottom:4px;">Password</div>
+            <input type="password" name="bind_password" value="" autocomplete="new-password" placeholder="{{if .HasPassword}}(lasciare vuoto per non modificare){{else}}nessuna password salvata{{end}}" class="input" style="width:100%;">
+        </div>
+        <button type="submit" class="btn btn-primary" style="flex:none;align-self:flex-start;">{{index .Messages "save"}}</button>
+    </form>
+</div>
+
+<div class="card" style="margin-top:16px;">
+    <h3>Template di provisioning del centralino</h3>
+    <div class="helptext" style="margin-bottom:10px;">Valori da impostare nella sezione LDAP del template telefoni sul ViVo.</div>
+    <div class="modal-scroll-x">
+    <table>
+        <tbody>
+            <tr><td>Indirizzo del server</td><td>IP dell'host Docker di Rubrica</td></tr>
+            <tr><td>Porta</td><td>{{.Port}}</td></tr>
+            <tr><td>Base</td><td><code>{{.BaseDN}}</code></td></tr>
+            <tr><td>Nome utente</td><td><code>{{.BindDN}}</code></td></tr>
+            <tr><td>Filtro nome LDAP</td><td><code>(|(cn=*%*)(sn=*%*))</code></td></tr>
+            <tr><td>Filtro numerico LDAP</td><td><code>(|(telephoneNumber=%)(mobile=%))</code></td></tr>
+            <tr><td>Attributi del nome</td><td><code>cn sn displayName</code></td></tr>
+            <tr><td>Attributi numero</td><td><code>telephoneNumber mobile</code></td></tr>
+            <tr><td>Nome visualizzato</td><td><code>%displayName</code></td></tr>
+            <tr><td>Protocollo</td><td>Versione 3, senza TLS</td></tr>
+        </tbody>
+    </table>
+    </div>
+</div>
