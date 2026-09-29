@@ -43,12 +43,13 @@ del listener loggati con prefisso `[LDAPSRV]`, non fatali per l'HTTP.
 
 - Env `LDAP_SERVER_PORT` (default `10389`). Il container gira come utente non
   root `rubrica` → non può aprire porte < 1024 all'interno.
-- `LDAP_SERVER_PORT=0` → server LDAP non avviato.
-- `docker-compose.yml`: mapping `"${LDAP_SERVER_PORT_HOST:-10389}:10389"` — porta
-  container fissa (un `0` nel mapping fa fallire tutto lo stack) e porta host
-  non privilegiata di default (una 389 occupata farebbe fallire il redeploy)
-  e `LDAP_SERVER_PORT` nella lista `environment:` (niente `env_file`, vedi
-  CLAUDE.md). `Dockerfile`: `EXPOSE 10389`.
+- `LDAP_SERVER_ENABLED=false` → server LDAP non avviato (default `true`). Non
+  si spegne con la porta: uno `0` nel mapping compose fa fallire tutto lo stack.
+- `docker-compose.yml`: mapping `"${LDAP_SERVER_PORT:-10389}:${LDAP_SERVER_PORT:-10389}"`,
+  stessa porta dentro e fuori come `SERVER_PORT`, scelta da `.env`; default non
+  privilegiata (una 389 occupata sull'host farebbe fallire il redeploy di tutta
+  l'app). `LDAP_SERVER_ENABLED`/`LDAP_SERVER_PORT` nella lista `environment:`
+  (niente `env_file`, vedi CLAUDE.md). `Dockerfile`: `EXPOSE 10389`.
 - Nessun TLS: il traffico resta sulla LAN voce, come l'LDAP attuale del ViVo.
 
 ### Configurazione (admin)
@@ -152,7 +153,7 @@ Valori da impostare nel template del centralino (sezione LDAP del telefono):
 | Campo | Valore |
 |---|---|
 | Indirizzo del server | IP host Docker di Rubrica |
-| Porta | `10389` (o `LDAP_SERVER_PORT_HOST`) |
+| Porta | `LDAP_SERVER_PORT` (default `10389`) |
 | Base | `ldapsrv_base_dn` |
 | Nome utente / Password | `ldapsrv_bind_dn` / `ldapsrv_bind_password` |
 | Filtro nome | `(\|(cn=*%*)(sn=*%*))` — wildcard aggiunti rispetto a oggi |

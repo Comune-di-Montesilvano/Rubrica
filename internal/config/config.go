@@ -13,9 +13,11 @@ type Config struct {
 	// Server
 	ServerHost string
 	ServerPort string
-	// LDAPServerPort è la porta del server LDAP per i telefoni
-	// (internal/ldapserver); "0" = server non avviato.
-	LDAPServerPort string
+	// Server LDAP per i telefoni (internal/ldapserver). La porta è la stessa
+	// dentro e fuori dal container (come SERVER_PORT); per spegnerlo si usa
+	// LDAPServerEnabled, non la porta (uno 0 nel mapping compose rompe lo stack).
+	LDAPServerEnabled bool
+	LDAPServerPort    string
 
 	// LDAP
 	LDAPHost           string
@@ -57,6 +59,7 @@ func Load() *Config {
 	return &Config{
 		ServerHost:          getEnv("SERVER_HOST", "0.0.0.0"),
 		ServerPort:          getEnv("SERVER_PORT", "8080"),
+		LDAPServerEnabled:   getEnvBool("LDAP_SERVER_ENABLED", true),
 		LDAPServerPort:      getEnv("LDAP_SERVER_PORT", "10389"),
 		LDAPHost:            getEnv("LDAP_HOST", "ldap://localhost:389"),
 		LDAPBaseDN:          getEnv("LDAP_BASE_DN", "dc=example,dc=com"),

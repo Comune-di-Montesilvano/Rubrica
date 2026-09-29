@@ -11,14 +11,15 @@ services:
     restart: unless-stopped
     ports:
       - "${SERVER_PORT:-8080}:${SERVER_PORT:-8080}"
-      # Porta nel container fissa (10389): LDAP_SERVER_PORT=0 spegne il server
-      # LDAP senza rompere il mapping. Host di default non privilegiata.
-      - "${LDAP_SERVER_PORT_HOST:-10389}:10389"
+      # Server LDAP per i telefoni: stessa porta dentro e fuori (come
+      # SERVER_PORT). Si spegne con LDAP_SERVER_ENABLED=false, mai con 0.
+      - "${LDAP_SERVER_PORT:-10389}:${LDAP_SERVER_PORT:-10389}"
     volumes:
       - rubrica-data:/data
     environment:
       - SERVER_HOST=${SERVER_HOST:-0.0.0.0}
       - SERVER_PORT=${SERVER_PORT:-8080}
+      - LDAP_SERVER_ENABLED=${LDAP_SERVER_ENABLED:-true}
       - LDAP_SERVER_PORT=${LDAP_SERVER_PORT:-10389}
       - LDAP_HOST=${LDAP_HOST}
       - LDAP_BASE_DN=${LDAP_BASE_DN}

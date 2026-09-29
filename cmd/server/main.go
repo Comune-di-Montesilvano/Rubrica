@@ -97,7 +97,7 @@ func (s *syncStatus) snapshot() syncStatus {
 }
 
 // ldapSrv è il server LDAP per i telefoni; nil se disattivato
-// (LDAP_SERVER_PORT=0) o se l'inizializzazione è fallita.
+// (LDAP_SERVER_ENABLED=false) o se l'inizializzazione è fallita.
 var ldapSrv *ldapserver.Server
 
 var (
@@ -144,7 +144,7 @@ func main() {
 
 	// Server LDAP read-only per i telefoni VoIP: errori non fatali, la
 	// rubrica web resta su anche se la porta LDAP non si apre.
-	if cfg.LDAPServerPort != "0" {
+	if cfg.LDAPServerEnabled {
 		srv, err := ldapserver.New(db, pbService)
 		if err != nil {
 			log.Printf("[LDAPSRV] Init failed: %v", err)
@@ -1745,7 +1745,7 @@ func phoneDirectoryData(r *http.Request) map[string]interface{} {
 	data["BaseDN"] = st.BaseDN
 	data["BindDN"] = st.BindDN
 	data["HasPassword"] = st.BindPassword != ""
-	data["Enabled"] = cfg.LDAPServerPort != "0"
+	data["Enabled"] = cfg.LDAPServerEnabled
 	data["Listening"] = ldapSrv != nil && ldapSrv.Ready()
 	if ldapSrv != nil && ldapSrv.Err() != nil {
 		data["ListenError"] = ldapSrv.Err().Error()
