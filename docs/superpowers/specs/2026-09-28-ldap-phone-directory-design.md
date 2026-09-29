@@ -43,7 +43,7 @@ del listener loggati con prefisso `[LDAPSRV]`, non fatali per l'HTTP.
 
 - Env `LDAP_SERVER_PORT` (default `3389`). Il container gira come utente non
   root `rubrica` → non può aprire porte < 1024 all'interno.
-- `LDAP_SERVER_PORT` vuota → server LDAP non avviato.
+- `LDAP_SERVER_PORT=0` → server LDAP non avviato.
 - `docker-compose.yml`: mapping `"${LDAP_SERVER_PORT_HOST:-389}:${LDAP_SERVER_PORT:-3389}"`
   e `LDAP_SERVER_PORT` nella lista `environment:` (niente `env_file`, vedi
   CLAUDE.md). `Dockerfile`: `EXPOSE 3389`.
@@ -96,13 +96,17 @@ title: <Title>                           (omesso se vuoto)
 mail: <Email>                            (omesso se vuoto)
 ```
 
+`sn`/`givenName` sono un'euristica (ultima parola del nome; in AD il nome può
+essere "COGNOME NOME"): la ricerca dei telefoni si basa su `cn` con wildcard.
+
 **Gruppo di chiamata** (`group_numbers`, perimetro = rubrica pubblica: esclusi
 i gruppi con zero membri attivi, stesso criterio di `handleSearch`):
 
 ```
-dn: cn=<Number>,ou=gruppi,$BASE
-objectClass: top, person, inetOrgPerson
-cn: <Name>
+dn: uid=gruppo-<Number>,ou=gruppi,$BASE
+objectClass: top, person, organizationalPerson, inetOrgPerson
+uid: gruppo-<Number>
+cn: <Name>                               (<Number> se il nome è vuoto)
 displayName: <Name>
 sn: <Name>
 telephoneNumber: <Number>

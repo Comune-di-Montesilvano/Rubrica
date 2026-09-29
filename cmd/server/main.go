@@ -27,6 +27,7 @@ import (
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/i18n"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/ldap"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/ldapserver"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/pbx"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/phonebook"
 )
@@ -95,6 +96,10 @@ func (s *syncStatus) snapshot() syncStatus {
 	return syncStatus{Running: s.Running, Phase: s.Phase, Message: s.Message, IsError: s.IsError}
 }
 
+// ldapSrv è il server LDAP per i telefoni; nil se disattivato
+// (LDAP_SERVER_PORT=0) o se l'inizializzazione è fallita.
+var ldapSrv *ldapserver.Server
+
 var (
 	ldapManualSync   = &syncStatus{}
 	pbxManualSync    = &syncStatus{}
@@ -136,6 +141,24 @@ func main() {
 
 	// Initialize phonebook service
 	pbService = phonebook.NewService(db)
+
+	// Server LDAP read-only per i telefoni VoIP: errori non fatali, la
+	// rubrica web resta su anche se la porta LDAP non si apre.
+	if cfg.LDAPServerPort != "0" {
+		srv, err := ldapserver.New(db, pbService)
+		if err != nil {
+			log.Printf("[LDAPSRV] Init failed: %v", err)
+		} else {
+			ldapSrv = srv
+			ldapAddr := fmt.Sprintf("%s:%s", cfg.ServerHost, cfg.LDAPServerPort)
+			go func() {
+				log.Printf("[LDAPSRV] Starting LDAP server on %s", ldapAddr)
+				if err := srv.Run(ldapAddr); err != nil {
+					log.Printf("[LDAPSRV] Server stopped: %v", err)
+				}
+			}()
+		}
+	}
 
 	// Initialize session store
 	store = sessions.NewCookieStore([]byte(cfg.SessionSecret))
@@ -288,6 +311,8 @@ func main() {
 	admin.HandleFunc("/pbx", handleAdminSavePBXConfig).Methods("POST")
 	admin.HandleFunc("/pbx/sync", handleAdminSyncPBX).Methods("POST")
 	admin.HandleFunc("/pbx/sync/status", handleAdminSyncPBXStatus).Methods("GET")
+	admin.HandleFunc("/phone-directory", handleAdminPhoneDirectory).Methods("GET")
+	admin.HandleFunc("/phone-directory", handleAdminSavePhoneDirectory).Methods("POST")
 	admin.HandleFunc("/backup", handleAdminBackup).Methods("GET")
 	admin.HandleFunc("/backup/create", handleAdminCreateBackup).Methods("POST")
 	admin.HandleFunc("/backup/status", handleAdminBackupStatus).Methods("GET")
@@ -1707,6 +1732,46 @@ func renderPBX(w http.ResponseWriter, r *http.Request) {
 // handleAdminPBX serve la pagina "Centralino" completa (navigazione diretta).
 func handleAdminPBX(w http.ResponseWriter, r *http.Request) {
 	templates.ExecuteTemplate(w, "admin_page_pbx.html", pbxData(r))
+}
+
+// phoneDirectoryData prepara i dati della pagina "Rubrica telefoni"
+// (server LDAP per i telefoni, vedi internal/ldapserver).
+func phoneDirectoryData(r *http.Request) map[string]interface{} {
+	st := ldapserver.LoadSettings(db)
+	data := railData()
+	data["Messages"] = i18n.GetMessages(i18n.ResolveLocale(r))
+	data["Username"] = sessionAdminUsername(r)
+	data["Section"] = "admin-phone-directory"
+	data["BaseDN"] = st.BaseDN
+	data["BindDN"] = st.BindDN
+	data["HasPassword"] = st.BindPassword != ""
+	data["Enabled"] = cfg.LDAPServerPort != "0"
+	data["Listening"] = ldapSrv != nil && ldapSrv.Ready()
+	data["Port"] = cfg.LDAPServerPort
+	return data
+}
+
+// handleAdminPhoneDirectory serve la pagina "Rubrica telefoni" completa.
+func handleAdminPhoneDirectory(w http.ResponseWriter, r *http.Request) {
+	templates.ExecuteTemplate(w, "admin_page_phone_directory.html", phoneDirectoryData(r))
+}
+
+// handleAdminSavePhoneDirectory salva base DN, bind DN e password del server
+// LDAP. Password vuota = invariata (mai ri-mostrata nel form); DN non valido
+// = niente salvato, errore mostrato nel frammento.
+func handleAdminSavePhoneDirectory(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form", http.StatusBadRequest)
+		return
+	}
+	err := ldapserver.SaveSettings(db, r.FormValue("base_dn"), r.FormValue("bind_dn"), r.FormValue("bind_password"))
+	data := phoneDirectoryData(r)
+	if err != nil {
+		data["Error"] = err.Error()
+	} else {
+		data["Saved"] = true
+	}
+	templates.ExecuteTemplate(w, "admin_phone_directory.html", data)
 }
 
 // handleAdminSavePBXConfig salva url/utente/password/filtri del centralino.
