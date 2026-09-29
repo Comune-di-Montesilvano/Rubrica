@@ -57,7 +57,7 @@ func Load() *Config {
 	return &Config{
 		ServerHost:          getEnv("SERVER_HOST", "0.0.0.0"),
 		ServerPort:          getEnv("SERVER_PORT", "8080"),
-		LDAPServerPort:      getEnv("LDAP_SERVER_PORT", "3389"),
+		LDAPServerPort:      getEnv("LDAP_SERVER_PORT", "10389"),
 		LDAPHost:            getEnv("LDAP_HOST", "ldap://localhost:389"),
 		LDAPBaseDN:          getEnv("LDAP_BASE_DN", "dc=example,dc=com"),
 		LDAPUserDNTemplate:  getEnv("LDAP_USER_DN_TEMPLATE", "uid={username},ou=users,dc=example,dc=com"),
