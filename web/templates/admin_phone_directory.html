@@ -2,8 +2,8 @@
     <h3>Server LDAP</h3>
     <div class="helptext" style="margin-bottom:10px;">
         {{if not .Enabled}}Disattivato (LDAP_SERVER_PORT=0).
-        {{else if .Listening}}In ascolto sulla porta {{.Port}} del container (sull'host: LDAP_SERVER_PORT_HOST, default 389).
-        {{else}}Non in ascolto: controllare i log del container ([LDAPSRV]).{{end}}
+        {{else if .Listening}}In ascolto sulla porta {{.Port}} del container (sull'host: LDAP_SERVER_PORT_HOST, default 10389).
+        {{else}}Non in ascolto{{if .ListenError}}: {{.ListenError}}{{else}}: controllare i log del container ([LDAPSRV]){{end}}.{{end}}
         {{if not .HasPassword}}<br><strong>Nessuna password impostata: ogni accesso dei telefoni viene rifiutato.</strong>{{end}}
     </div>
     {{if .Error}}<div class="helptext" style="color:var(--danger, #b42318);margin-bottom:10px;">{{.Error}}</div>{{end}}
@@ -15,11 +15,11 @@
         </div>
         <div>
             <div class="helptext" style="margin-bottom:4px;">Utente (bind DN)</div>
-            <input type="text" name="bind_dn" value="{{.BindDN}}" class="input" style="width:100%;">
+            <input type="text" name="bind_dn" value="{{.BindDN}}" autocomplete="off" class="input" style="width:100%;">
         </div>
         <div>
             <div class="helptext" style="margin-bottom:4px;">Password</div>
-            <input type="password" name="bind_password" value="" placeholder="{{if .HasPassword}}(lasciare vuoto per non modificare){{else}}nessuna password salvata{{end}}" class="input" style="width:100%;">
+            <input type="password" name="bind_password" value="" autocomplete="new-password" placeholder="{{if .HasPassword}}(lasciare vuoto per non modificare){{else}}nessuna password salvata{{end}}" class="input" style="width:100%;">
         </div>
         <button type="submit" class="btn btn-primary" style="flex:none;align-self:flex-start;">{{index .Messages "save"}}</button>
     </form>
@@ -32,7 +32,7 @@
     <table>
         <tbody>
             <tr><td>Indirizzo del server</td><td>IP dell'host Docker di Rubrica</td></tr>
-            <tr><td>Porta</td><td>389 (o LDAP_SERVER_PORT_HOST)</td></tr>
+            <tr><td>Porta</td><td>10389 (o LDAP_SERVER_PORT_HOST)</td></tr>
             <tr><td>Base</td><td><code>{{.BaseDN}}</code></td></tr>
             <tr><td>Nome utente</td><td><code>{{.BindDN}}</code></td></tr>
             <tr><td>Filtro nome LDAP</td><td><code>(|(cn=*%*)(sn=*%*))</code></td></tr>

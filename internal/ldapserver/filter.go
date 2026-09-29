@@ -48,9 +48,9 @@ func matchPacket(p *ber.Packet, e *Entry) bool {
 		if len(p.Children) != 2 {
 			return false
 		}
-		want := packetString(p.Children[1])
+		want := fold(packetString(p.Children[1]))
 		for _, v := range e.Get(packetString(p.Children[0])) {
-			if strings.EqualFold(v, want) {
+			if fold(v) == want {
 				return true
 			}
 		}
@@ -60,7 +60,7 @@ func matchPacket(p *ber.Packet, e *Entry) bool {
 			return false
 		}
 		for _, v := range e.Get(packetString(p.Children[0])) {
-			if matchSubstrings(strings.ToLower(v), p.Children[1].Children) {
+			if matchSubstrings(fold(v), p.Children[1].Children) {
 				return true
 			}
 		}
@@ -72,12 +72,12 @@ func matchPacket(p *ber.Packet, e *Entry) bool {
 	}
 }
 
-// matchSubstrings verifica v (già minuscolo) contro le parti initial/any/final
-// di un filtro substring, nell'ordine in cui compaiono.
+// matchSubstrings verifica v (già passato da fold) contro le parti
+// initial/any/final di un filtro substring, nell'ordine in cui compaiono.
 func matchSubstrings(v string, parts []*ber.Packet) bool {
 	pos := 0
 	for i, part := range parts {
-		s := strings.ToLower(packetString(part))
+		s := fold(packetString(part))
 		switch part.Tag {
 		case ldap.FilterSubstringsInitial:
 			if i != 0 || !strings.HasPrefix(v, s) {
@@ -98,6 +98,32 @@ func matchSubstrings(v string, parts []*ber.Packet) bool {
 		}
 	}
 	return true
+}
+
+// fold normalizza un valore per il confronto: minuscolo, vocali accentate
+// ridotte alla base e apostrofi rimossi. Dalla tastiera del telefono non si
+// digitano accenti né apostrofi: "dalessandro" deve trovare "D'ALESSANDRO",
+// "nicolo" deve trovare "NICOLÒ". Applicato sia ai valori che al filtro.
+func fold(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		switch r {
+		case '\'', '’', '`':
+			continue
+		case 'à', 'á', 'â', 'ä':
+			r = 'a'
+		case 'è', 'é', 'ê', 'ë':
+			r = 'e'
+		case 'ì', 'í', 'î', 'ï':
+			r = 'i'
+		case 'ò', 'ó', 'ô', 'ö':
+			r = 'o'
+		case 'ù', 'ú', 'û', 'ü':
+			r = 'u'
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func packetString(p *ber.Packet) string {

@@ -1747,6 +1747,9 @@ func phoneDirectoryData(r *http.Request) map[string]interface{} {
 	data["HasPassword"] = st.BindPassword != ""
 	data["Enabled"] = cfg.LDAPServerPort != "0"
 	data["Listening"] = ldapSrv != nil && ldapSrv.Ready()
+	if ldapSrv != nil && ldapSrv.Err() != nil {
+		data["ListenError"] = ldapSrv.Err().Error()
+	}
 	data["Port"] = cfg.LDAPServerPort
 	return data
 }

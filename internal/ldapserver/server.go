@@ -24,8 +24,10 @@ type Server struct {
 	pb *phonebook.Service
 	gs *gldap.Server
 
-	mu     sync.Mutex
-	authed map[int]bool // connectionID -> bind riuscito
+	mu      sync.Mutex
+	authed  map[int]bool // connectionID -> bind riuscito
+	stopped bool         // Run è terminato
+	runErr  error        // errore con cui Run è terminato
 }
 
 func New(db *database.DB, pb *phonebook.Service) (*Server, error) {
@@ -55,13 +57,36 @@ func New(db *database.DB, pb *phonebook.Service) (*Server, error) {
 }
 
 // Run avvia il listener su addr (host:porta) e blocca finché il server non
-// viene fermato.
-func (s *Server) Run(addr string) error { return s.gs.Run(addr) }
+// viene fermato. Quando ritorna (listen fallito, accept interrotto, Stop) il
+// server risulta non pronto e l'eventuale errore resta leggibile via Err.
+func (s *Server) Run(addr string) error {
+	err := s.gs.Run(addr)
+	s.mu.Lock()
+	s.stopped = true
+	s.runErr = err
+	s.mu.Unlock()
+	return err
+}
 
 func (s *Server) Stop() error { return s.gs.Stop() }
 
-// Ready dice se il listener è attivo.
-func (s *Server) Ready() bool { return s.gs.Ready() }
+// Ready dice se il listener è attivo. Non basta gs.Ready(): gldap segna il
+// listener pronto prima di controllare l'errore di net.Listen e non lo
+// azzera quando Run termina.
+func (s *Server) Ready() bool {
+	s.mu.Lock()
+	stopped := s.stopped
+	s.mu.Unlock()
+	return !stopped && s.gs.Ready()
+}
+
+// Err restituisce l'errore con cui Run è terminato, nil se è ancora attivo
+// o è stato fermato normalmente.
+func (s *Server) Err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runErr
+}
 
 func (s *Server) forget(connID int) {
 	s.mu.Lock()

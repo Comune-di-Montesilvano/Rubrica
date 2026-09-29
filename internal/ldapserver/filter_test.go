@@ -44,6 +44,13 @@ func TestParseFilter(t *testing.T) {
 		{"(mail=*)", false},
 		{"(telephoneNumber>=700)", false},
 		{"(cn~=nicolo)", false},
+		// accenti e apostrofi ignorati: dalla tastiera del telefono non si digitano
+		{"(cn=*nicolo*)", true},
+		{"(cn=*daddiego*)", true},
+		{"(sn=daddiego)", true},
+		{"(cn=nicolo daddiego)", true},
+		{"(sn=dadd*)", true},
+		{"(cn=*nicolà*)", false},
 	}
 	e := filterTestEntry()
 	for _, tc := range cases {

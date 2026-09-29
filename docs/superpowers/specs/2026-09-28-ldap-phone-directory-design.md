@@ -41,12 +41,14 @@ del listener loggati con prefisso `[LDAPSRV]`, non fatali per l'HTTP.
 
 ### Porta
 
-- Env `LDAP_SERVER_PORT` (default `3389`). Il container gira come utente non
+- Env `LDAP_SERVER_PORT` (default `10389`). Il container gira come utente non
   root `rubrica` → non può aprire porte < 1024 all'interno.
 - `LDAP_SERVER_PORT=0` → server LDAP non avviato.
-- `docker-compose.yml`: mapping `"${LDAP_SERVER_PORT_HOST:-389}:${LDAP_SERVER_PORT:-3389}"`
+- `docker-compose.yml`: mapping `"${LDAP_SERVER_PORT_HOST:-10389}:10389"` — porta
+  container fissa (un `0` nel mapping fa fallire tutto lo stack) e porta host
+  non privilegiata di default (una 389 occupata farebbe fallire il redeploy)
   e `LDAP_SERVER_PORT` nella lista `environment:` (niente `env_file`, vedi
-  CLAUDE.md). `Dockerfile`: `EXPOSE 3389`.
+  CLAUDE.md). `Dockerfile`: `EXPOSE 10389`.
 - Nessun TLS: il traffico resta sulla LAN voce, come l'LDAP attuale del ViVo.
 
 ### Configurazione (admin)
@@ -134,7 +136,9 @@ l'interno.
 ### Filtri supportati
 
 `&`, `|`, `!`, uguaglianza, substring (`*` iniziale/intermedio/finale),
-presenza (`attr=*`). Confronto case-insensitive su tutti gli attributi.
+presenza (`attr=*`). Confronto case-insensitive su tutti gli attributi, che
+ignora anche accenti e apostrofi (dalla tastiera del telefono non si digitano:
+`dalessandro` trova "D'ALESSANDRO", `nicolo` trova "NICOLÒ").
 Qualsiasi altro tipo (`>=`, `<=`, `~=`, extensible) → nessun match per quel
 sotto-filtro (non errore). Attributo inesistente su una entry (es. `mobile`)
 → nessun match.
@@ -148,7 +152,7 @@ Valori da impostare nel template del centralino (sezione LDAP del telefono):
 | Campo | Valore |
 |---|---|
 | Indirizzo del server | IP host Docker di Rubrica |
-| Porta | `389` (o `LDAP_SERVER_PORT_HOST`) |
+| Porta | `10389` (o `LDAP_SERVER_PORT_HOST`) |
 | Base | `ldapsrv_base_dn` |
 | Nome utente / Password | `ldapsrv_bind_dn` / `ldapsrv_bind_password` |
 | Filtro nome | `(\|(cn=*%*)(sn=*%*))` — wildcard aggiunti rispetto a oggi |

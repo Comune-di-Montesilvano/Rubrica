@@ -243,6 +243,29 @@ func TestSearchBaseDNChange(t *testing.T) {
 	}
 }
 
+func TestReadyFalseWhenListenFails(t *testing.T) {
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer busy.Close()
+
+	db := newTestDB(t)
+	srv, err := New(db, phonebook.NewService(db))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := srv.Run(busy.Addr().String()); err == nil {
+		t.Fatal("Run su porta occupata: atteso errore")
+	}
+	if srv.Ready() {
+		t.Error("Ready() = true dopo listen fallito, atteso false")
+	}
+	if srv.Err() == nil {
+		t.Error("Err() = nil dopo listen fallito")
+	}
+}
+
 func TestAuthIsPerConnection(t *testing.T) {
 	addr, _ := startServer(t, true)
 	authed := dial(t, addr)
