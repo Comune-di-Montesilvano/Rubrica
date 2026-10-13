@@ -42,9 +42,13 @@
     <summary class="dept-head">
         <span class="dept-name">{{sentenceCase .Name}}</span>
         <span class="dept-count">{{len .Contacts}}</span>
+        <button type="button" class="dept-copy" title="Copia le email del reparto" onclick="copyEmails(event, this.closest('details.dept'), this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6l8 6 8-6M4 6h16v12H4V6z"/></svg>
+            <span class="dept-copy-label">Copia email</span>
+        </button>
     </summary>
     {{range .Contacts}}
-    <div class="row">
+    <div class="row"{{if .Contact.Email}} data-email="{{.Contact.Email}}"{{end}}>
         <div class="badge">{{initials .Contact.DisplayName}}</div>
         <a class="who" href="/contacts/{{.Contact.UID}}"
            hx-get="/contacts/{{.Contact.UID}}/fragment" hx-target="#contact-modal-content" hx-swap="innerHTML"
