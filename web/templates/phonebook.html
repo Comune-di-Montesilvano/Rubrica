@@ -26,7 +26,10 @@
                            hx-target="#search-results" hx-swap="innerHTML">
                     Solo con numero
                 </label>
-                <button type="button" class="toolbar-link" id="toggle-groups-btn" onclick="toggleAllGroups()">Comprimi tutto</button>
+                <span class="toolbar-actions">
+                    <button type="button" class="toolbar-link" title="Copia le email di tutti i contatti mostrati" onclick="copyEmails(event, document.getElementById('search-results'), this)">Copia email risultati</button>
+                    <button type="button" class="toolbar-link" id="toggle-groups-btn" onclick="toggleAllGroups()">Comprimi tutto</button>
+                </span>
             </div>
 
             <div class="prefix-helper" id="prefix-helper">
@@ -72,6 +75,51 @@
                 parent = details.parentElement;
             }
             el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        // copyEmails copia negli appunti le email (data-email delle righe
+        // contatto) contenute in scope, separate da "; " così da poterle
+        // incollare in blocco in A/Cc/Ccn di Outlook. Niente mailto: oltre
+        // ~2000 caratteri (poche decine di indirizzi) viene troncato.
+        // navigator.clipboard esiste solo in contesto sicuro (HTTPS o
+        // localhost): sulla intranet in HTTP si ripiega su execCommand.
+        function copyEmails(ev, scope, btn) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            var seen = {}, list = [];
+            scope.querySelectorAll('[data-email]').forEach(function (el) {
+                var e = el.getAttribute('data-email').trim();
+                var k = e.toLowerCase();
+                if (e && !seen[k]) { seen[k] = true; list.push(e); }
+            });
+            var label = btn.querySelector('.dept-copy-label') || btn;
+            var original = label.getAttribute('data-original') || label.textContent;
+            label.setAttribute('data-original', original);
+            function done(msg) {
+                label.textContent = msg;
+                clearTimeout(btn._copyTimer);
+                btn._copyTimer = setTimeout(function () { label.textContent = original; }, 2000);
+            }
+            if (!list.length) { done('Nessuna email'); return; }
+            var text = list.join('; ');
+            var ok = 'Copiate ' + list.length + ' email';
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(text).then(function () { done(ok); }, function () { done(fallbackCopy(text) ? ok : 'Copia non riuscita'); });
+            } else {
+                done(fallbackCopy(text) ? ok : 'Copia non riuscita');
+            }
+        }
+        function fallbackCopy(text) {
+            var ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            var ok = false;
+            try { ok = document.execCommand('copy'); } catch (e) {}
+            document.body.removeChild(ta);
+            return ok;
         }
         function toggleAllGroups() {
             var details = document.querySelectorAll('#search-results details.dept');
