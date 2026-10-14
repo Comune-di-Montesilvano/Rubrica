@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -84,6 +83,9 @@ func (s *syncStatus) finish(err error) {
 	if err != nil {
 		s.IsError = true
 		s.Message = "Sync fallito: " + err.Error()
+	} else if held := getLastSyncReport().StaleHeld; held > 0 && s == ldapManualSync {
+		s.IsError = true
+		s.Message = fmt.Sprintf("Calo anomalo: %d contatti uscirebbero dalla rubrica. Cancellazione sospesa: verifica il perimetro in Aree e conferma.", held)
 	} else {
 		s.IsError = false
 		s.Message = "Sync completato con successo."
@@ -241,10 +243,8 @@ func main() {
 
 	// Perform initial sync
 	go func() {
-		if err := ldap.SyncContacts(db, cfg, nil); err != nil {
+		if err := runLDAPSync(ldap.SyncOptions{}, nil); err != nil {
 			log.Printf("[SYNC] Initial sync failed: %v", err)
-		} else {
-			lastSync = time.Now()
 		}
 		if result, err := pbx.SyncPBX(db, nil); err != nil {
 			log.Printf("[PBX] Initial sync failed: %v", err)
@@ -290,13 +290,10 @@ func main() {
 	admin.HandleFunc("/groups/{id}/members", handleAdminAddMember).Methods("POST")
 	admin.HandleFunc("/groups/{id}/members/{contact_id}/delete", handleAdminRemoveMember).Methods("POST")
 	admin.HandleFunc("/groups/{id}/contacts/search", handleAdminContactSearch).Methods("GET")
-	admin.HandleFunc("/ou-mapping", handleAdminOUMapping).Methods("GET")
-	admin.HandleFunc("/ou-mapping", handleAdminSaveOUMapping).Methods("POST")
-	admin.HandleFunc("/ou-mapping/add", handleAdminAddOU).Methods("POST")
-	admin.HandleFunc("/ou-mapping/{ou}/delete", handleAdminDeleteOU).Methods("POST")
 	admin.HandleFunc("/areas", handleAdminAreas).Methods("GET")
 	admin.HandleFunc("/areas", handleAdminCreateArea).Methods("POST")
 	admin.HandleFunc("/areas/{id}", handleAdminRenameArea).Methods("POST")
+	admin.HandleFunc("/areas/{id}/move", handleAdminMoveArea).Methods("POST")
 	admin.HandleFunc("/areas/{id}/delete", handleAdminDeleteArea).Methods("POST")
 	admin.HandleFunc("/group-categories", handleAdminGroupCategories).Methods("GET")
 	admin.HandleFunc("/group-categories", handleAdminCreateGroupCategory).Methods("POST")
@@ -344,10 +341,8 @@ func ldapSyncWorker() {
 
 	for range ticker.C {
 		log.Printf("[SYNC] Starting scheduled sync...")
-		if err := ldap.SyncContacts(db, cfg, nil); err != nil {
+		if err := runLDAPSync(ldap.SyncOptions{}, nil); err != nil {
 			log.Printf("[SYNC] Failed: %v", err)
-		} else {
-			lastSync = time.Now()
 		}
 		if result, err := pbx.SyncPBX(db, nil); err != nil {
 			log.Printf("[PBX] Failed: %v", err)
@@ -795,22 +790,7 @@ func handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 // finché non risulta completato (successo o errore), invece di restare con
 // un bottone senza alcun feedback per tutta la durata del sync.
 func handleAdminSync(w http.ResponseWriter, r *http.Request) {
-	ldapManualSync.start()
-	go func() {
-		err := ldap.SyncContacts(db, cfg, func(done, total int) {
-			if total > 0 {
-				ldapManualSync.setPhase(fmt.Sprintf("Elaborazione contatti: %d/%d", done, total))
-			}
-		})
-		if err != nil {
-			log.Printf("[SYNC] Manual sync failed: %v", err)
-		} else {
-			lastSync = time.Now()
-			log.Printf("[SYNC] Manual sync completed")
-		}
-		ldapManualSync.finish(err)
-	}()
-
+	startLDAPSync(r.FormValue("force") == "1")
 	renderSyncStatus(w, r)
 }
 
@@ -1055,236 +1035,6 @@ func handleAdminContactSearch(w http.ResponseWriter, r *http.Request) {
 	templates.ExecuteTemplate(w, "admin_contact_search.html", data)
 }
 
-// loadOUMapping legge il mapping salvato, o il default se non ancora
-// configurato / JSON non valido.
-func loadOUMapping() map[string]string {
-	raw, _ := db.GetConfig(ldap.OUAreaMappingConfigKey)
-	if raw == "" {
-		return ldap.DefaultOUAreaMapping
-	}
-	var stored map[string]string
-	if err := json.Unmarshal([]byte(raw), &stored); err != nil || len(stored) == 0 {
-		return ldap.DefaultOUAreaMapping
-	}
-	return stored
-}
-
-// buildOUMappingData raccoglie i dati per la sezione mapping OU->Area:
-// l'unione delle OU viste nei dati LDAP e di quelle già mappate a mano
-// (una OU aggiunta manualmente per un contatto non ancora sincronizzato
-// non deve sparire dalla lista solo perché nessun contatto la usa ancora).
-func buildOUMappingData(r *http.Request) (map[string]interface{}, error) {
-	dns, err := db.ListDistinctLDAPDNs()
-	if err != nil {
-		return nil, fmt.Errorf("failed to list OUs: %w", err)
-	}
-
-	mapping := loadOUMapping()
-
-	ouSet := make(map[string]bool)
-	for _, dn := range dns {
-		if ou := ldap.ClassificationOU(dn); ou != "" {
-			ouSet[ou] = true
-		}
-	}
-	for ou := range mapping {
-		ouSet[ou] = true
-	}
-	ous := make([]string, 0, len(ouSet))
-	for ou := range ouSet {
-		ous = append(ous, ou)
-	}
-	sort.Strings(ous)
-
-	areas, err := db.ListAreas()
-	if err != nil {
-		log.Printf("[ADMIN] Failed to list areas: %v", err)
-	}
-
-	locale := i18n.ResolveLocale(r)
-	return map[string]interface{}{
-		"OUs":      ous,
-		"Mapping":  mapping,
-		"Areas":    areas,
-		"Messages": i18n.GetMessages(locale),
-	}, nil
-}
-
-// renderOUMapping re-renders solo il frammento (usato dopo save/add via
-// HTMX, che sostituisce #ou-mapping-content in place).
-func renderOUMapping(w http.ResponseWriter, r *http.Request) {
-	data, err := buildOUMappingData(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	templates.ExecuteTemplate(w, "admin_ou_mapping.html", data)
-}
-
-// handleAdminAddOU aggiunge una nuova OU (digitata a mano) al mapping,
-// senza richiedere che sia già stata vista in un sync — serve per
-// preparare in anticipo l'area di contatti extra-dominio non ancora
-// presenti.
-func handleAdminAddOU(w http.ResponseWriter, r *http.Request) {
-	ou := strings.ToUpper(strings.TrimSpace(r.FormValue("new_ou")))
-	area := strings.TrimSpace(r.FormValue("new_area"))
-	if ou == "" {
-		renderOUMapping(w, r)
-		return
-	}
-
-	mapping := loadOUMapping()
-	// copia: loadOUMapping può ritornare la mappa di default condivisa,
-	// non va mutata in place.
-	updated := make(map[string]string, len(mapping)+1)
-	for k, v := range mapping {
-		updated[k] = v
-	}
-	if area != "" {
-		updated[ou] = area
-	} else if _, exists := updated[ou]; !exists {
-		updated[ou] = ""
-	}
-
-	raw, err := json.Marshal(updated)
-	if err != nil {
-		http.Error(w, "Failed to encode mapping", http.StatusInternalServerError)
-		return
-	}
-	if err := db.SetConfig(ldap.OUAreaMappingConfigKey, string(raw)); err != nil {
-		http.Error(w, "Failed to save mapping", http.StatusInternalServerError)
-		return
-	}
-
-	renderOUMapping(w, r)
-}
-
-// handleAdminDeleteOU rimuove una singola associazione OU->Area,
-// indipendentemente dalle altre righe della tabella — azione esplicita,
-// non affidata al side-effect implicito di "seleziona Nessuna e salva
-// tutto" che risultava poco affidabile/scopribile.
-func handleAdminDeleteOU(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	ou := vars["ou"]
-
-	mapping := loadOUMapping()
-	updated := make(map[string]string, len(mapping))
-	for k, v := range mapping {
-		if k == ou {
-			continue
-		}
-		updated[k] = v
-	}
-
-	raw, err := json.Marshal(updated)
-	if err != nil {
-		http.Error(w, "Failed to encode mapping", http.StatusInternalServerError)
-		return
-	}
-	if err := db.SetConfig(ldap.OUAreaMappingConfigKey, string(raw)); err != nil {
-		http.Error(w, "Failed to save mapping", http.StatusInternalServerError)
-		return
-	}
-
-	renderOUMapping(w, r)
-}
-
-// handleAdminOUMapping serve la pagina "Mapping OU" completa (navigazione
-// diretta) — le scritture (save/add) continuano a ricevere solo il
-// frammento via renderOUMapping.
-func handleAdminOUMapping(w http.ResponseWriter, r *http.Request) {
-	content, err := buildOUMappingData(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	data := railData()
-	for k, v := range content {
-		data[k] = v
-	}
-	data["Username"] = sessionAdminUsername(r)
-	data["Section"] = "admin-ou-mapping"
-	templates.ExecuteTemplate(w, "admin_page_ou_mapping.html", data)
-}
-
-// handleAdminSaveOUMapping salva il mapping OU->Area scelto dall'admin e
-// avvia subito un resync in background, così l'effetto si vede senza
-// dover aspettare il prossimo ciclo orario.
-func handleAdminSaveOUMapping(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Invalid form", http.StatusBadRequest)
-		return
-	}
-
-	mapping := make(map[string]string)
-	for key, vals := range r.Form {
-		if !strings.HasPrefix(key, "area_") || len(vals) == 0 {
-			continue
-		}
-		ou := strings.TrimPrefix(key, "area_")
-		if area := strings.TrimSpace(vals[0]); area != "" {
-			mapping[ou] = area
-		}
-	}
-
-	raw, err := json.Marshal(mapping)
-	if err != nil {
-		http.Error(w, "Failed to encode mapping", http.StatusInternalServerError)
-		return
-	}
-	if err := db.SetConfig(ldap.OUAreaMappingConfigKey, string(raw)); err != nil {
-		http.Error(w, "Failed to save mapping", http.StatusInternalServerError)
-		return
-	}
-
-	go func() {
-		if err := ldap.SyncContacts(db, cfg, nil); err != nil {
-			log.Printf("[SYNC] Resync after OU mapping change failed: %v", err)
-		} else {
-			lastSync = time.Now()
-		}
-	}()
-
-	renderOUMapping(w, r)
-}
-
-// renderAdminAreas re-renders the CRUD aree section (list + form nuova
-// area + rinomina/elimina).
-func renderAdminAreas(w http.ResponseWriter, r *http.Request) {
-	areas, err := db.ListAreas()
-	if err != nil {
-		http.Error(w, "Failed to list areas", http.StatusInternalServerError)
-		return
-	}
-
-	locale := i18n.ResolveLocale(r)
-	data := map[string]interface{}{
-		"Areas":    areas,
-		"Messages": i18n.GetMessages(locale),
-	}
-	templates.ExecuteTemplate(w, "admin_areas.html", data)
-}
-
-// handleAdminAreas serve la pagina "Aree" completa (navigazione diretta)
-// — le scritture (crea/rinomina/elimina) continuano a ricevere solo il
-// frammento via renderAdminAreas.
-func handleAdminAreas(w http.ResponseWriter, r *http.Request) {
-	areas, err := db.ListAreas()
-	if err != nil {
-		http.Error(w, "Failed to list areas", http.StatusInternalServerError)
-		return
-	}
-
-	locale := i18n.ResolveLocale(r)
-	data := railData()
-	data["Areas"] = areas
-	data["Username"] = sessionAdminUsername(r)
-	data["Section"] = "admin-areas"
-	data["Messages"] = i18n.GetMessages(locale)
-
-	templates.ExecuteTemplate(w, "admin_page_areas.html", data)
-}
-
 // slugify converte un nome area in una chiave stabile (minuscolo,
 // solo lettere/numeri/underscore) usata come valore di contacts.area.
 func slugify(name string) string {
@@ -1298,67 +1048,6 @@ func slugify(name string) string {
 		}
 	}
 	return b.String()
-}
-
-func handleAdminCreateArea(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimSpace(r.FormValue("name"))
-	if name == "" {
-		renderAdminAreas(w, r)
-		return
-	}
-	key := slugify(name)
-	if key == "" {
-		renderAdminAreas(w, r)
-		return
-	}
-
-	if err := db.CreateArea(&database.Area{Key: key, Name: name}); err != nil {
-		log.Printf("[ADMIN] Failed to create area %q: %v", name, err)
-	}
-	renderAdminAreas(w, r)
-}
-
-func handleAdminRenameArea(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	id, _ := strconv.ParseInt(vars["id"], 10, 64)
-	name := strings.TrimSpace(r.FormValue("name"))
-	if name == "" {
-		renderAdminAreas(w, r)
-		return
-	}
-
-	if err := db.RenameArea(id, name); err != nil {
-		log.Printf("[ADMIN] Failed to rename area %d: %v", id, err)
-	}
-
-	// Regola per range interno (opzionale): entrambi i campi vuoti =
-	// nessuna regola (SetAreaRange con nil, nil la rimuove).
-	var rangeStart, rangeEnd *int
-	if v := strings.TrimSpace(r.FormValue("range_start")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			rangeStart = &n
-		}
-	}
-	if v := strings.TrimSpace(r.FormValue("range_end")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			rangeEnd = &n
-		}
-	}
-	if err := db.SetAreaRange(id, rangeStart, rangeEnd); err != nil {
-		log.Printf("[ADMIN] Failed to set area range %d: %v", id, err)
-	}
-
-	renderAdminAreas(w, r)
-}
-
-func handleAdminDeleteArea(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	id, _ := strconv.ParseInt(vars["id"], 10, 64)
-
-	if err := db.DeleteArea(id); err != nil {
-		log.Printf("[ADMIN] Failed to delete area %d: %v", id, err)
-	}
-	renderAdminAreas(w, r)
 }
 
 // renderAdminGroupCategories re-renders solo il frammento (usato dopo

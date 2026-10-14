@@ -10,8 +10,9 @@
 <body>
     <div class="shell">
         {{template "rail.html" .}}
-        <main class="main" style="max-width:920px;">
+        <main class="main" style="max-width:980px;">
             <h1 class="page-title">Aree</h1>
+            <div id="scope-content">{{template "admin_scope.html" .}}</div>
             <div id="areas-content">{{template "admin_areas.html" .}}</div>
         </main>
     </div>

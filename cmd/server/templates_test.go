@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"html/template"
 	"regexp"
+	"strings"
 	"testing"
+
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
 )
 
 // Il form della rubrica telefoni ha un campo testo seguito da un campo
@@ -48,5 +51,28 @@ func TestPhoneDirectoryShowsListenError(t *testing.T) {
 	}
 	if !bytes.Contains(buf.Bytes(), []byte("address already in use")) {
 		t.Error("errore del listener non mostrato nella pagina")
+	}
+}
+
+func TestAdminAreasTreeRendersSubAreas(t *testing.T) {
+	tpl := template.Must(template.New("").ParseFiles("../../web/templates/admin_areas.html"))
+	interni := &database.Area{ID: 1, Key: "interni", Name: "Personale comunale"}
+	dir := &database.Area{ID: 2, Key: "dirigenti", Name: "Dirigenti", ParentKey: "interni"}
+	data := map[string]interface{}{
+		"Messages":      map[string]string{"save": "Salva", "delete": "Elimina"},
+		"AreaNodes":     []*database.AreaNode{{Area: interni, Children: []*database.Area{dir}}},
+		"RuleCounts":    map[int64]int{1: 1, 2: 0},
+		"AreaCounts":    map[string]int{"interni": 240},
+		"SubAreaCounts": map[string]int{"dirigenti": 4},
+	}
+	var buf bytes.Buffer
+	if err := tpl.ExecuteTemplate(&buf, "admin_areas.html", data); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	html := buf.String()
+	for _, want := range []string{`href="/admin/areas/2"`, "Dirigenti", `name="parent_key" value="interni"`, "nessuna regola", "/admin/areas/2/move?dir=up"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("manca %q nel frammento", want)
+		}
 	}
 }

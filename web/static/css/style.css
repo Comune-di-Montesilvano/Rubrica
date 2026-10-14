@@ -436,3 +436,6 @@ td.num { font-family: 'IBM Plex Mono'; font-variant-numeric: tabular-nums; font-
     .grid2 { grid-template-columns: 1fr; }
     .detail-page { margin: 16px auto; }
 }
+
+.area-sub-row td:first-child { padding-left: 18px; }
+.area-sub-row { background: var(--accent-tint); }
