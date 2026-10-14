@@ -31,6 +31,7 @@ services:
       - LDAP_ADMIN_GROUP=${LDAP_ADMIN_GROUP}
       - LDAP_SEARCH_FILTER=${LDAP_SEARCH_FILTER}
       - LDAP_ONLY_ACTIVE=${LDAP_ONLY_ACTIVE:-true}
+      # seed una tantum del perimetro della rubrica (vedi .env.example)
       - LDAP_ALLOWED_GROUPS=${LDAP_ALLOWED_GROUPS}
       - ADMIN_USERS=${ADMIN_USERS}
       - SYNC_INTERVAL_HOURS=${SYNC_INTERVAL_HOURS:-1}
