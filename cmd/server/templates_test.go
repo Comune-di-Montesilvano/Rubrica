@@ -9,6 +9,7 @@ import (
 
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/ldap"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/phonebook"
 )
 
 // Il form della rubrica telefoni ha un campo testo seguito da un campo
@@ -148,5 +149,29 @@ func TestAdminScopePreviewRenders(t *testing.T) {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("manca %q", want)
 		}
+	}
+}
+
+func TestSearchResultsShowsSubAreaTags(t *testing.T) {
+	funcs := template.FuncMap{
+		"initials": func(string) string { return "XX" }, "sentenceCase": func(s string) string { return s },
+		"extList": func(s string) string { return s },
+	}
+	tpl := template.Must(template.New("").Funcs(funcs).ParseFiles(
+		"../../web/templates/search_results.html", "../../web/templates/group_category_node.html", "../../web/templates/group_row.html"))
+	cw := &phonebook.ContactWithGroups{
+		Contact:  &database.Contact{UID: "a", DisplayName: "Anna"},
+		SubAreas: []phonebook.SubAreaTag{{Key: "dirigenti", Name: "Dirigente"}, {Key: "pc", Name: "Protezione civile"}},
+	}
+	data := map[string]interface{}{
+		"Groups":   []*phonebook.DepartmentGroup{{Name: "Ragioneria", Contacts: []*phonebook.ContactWithGroups{cw}}},
+		"Messages": map[string]string{"no_results": "Nessun risultato"},
+	}
+	var buf bytes.Buffer
+	if err := tpl.ExecuteTemplate(&buf, "search_results.html", data); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if strings.Count(buf.String(), `class="sub-tag"`) != 2 || !strings.Contains(buf.String(), "Protezione civile") {
+		t.Errorf("tag mancanti: %s", buf.String())
 	}
 }

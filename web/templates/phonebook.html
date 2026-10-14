@@ -38,7 +38,7 @@
                 <button type="button" onclick="document.getElementById('prefix-helper').hidden = true; try { localStorage.setItem('ldavsync-prefix-helper-dismissed', '1'); } catch(e) {}" aria-label="Chiudi">&times;</button>
             </div>
 
-            <div id="search-results" hx-get="/search{{if .InitialGroup}}?group={{.InitialGroup}}{{end}}" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
+            <div id="search-results" hx-get="/search{{if .InitialGroup}}?group={{.InitialGroup}}{{if .InitialSub}}&sub={{.InitialSub}}{{end}}{{end}}" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
                 <div class="loading-spinner"><p>Caricamento contatti...</p></div>
             </div>
         </main>

@@ -19,6 +19,7 @@ import (
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/i18n"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/ldap"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/pbx"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/phonebook"
 	"github.com/gorilla/mux"
 )
 
@@ -452,4 +453,21 @@ func handleAdminADSuggest(w http.ResponseWriter, r *http.Request) {
 		data["Suggestions"] = sugg
 	}
 	templates.ExecuteTemplate(w, "admin_ad_suggestions.html", data)
+}
+
+// filterBySubArea tiene i risultati che hanno la sotto-area sub ("" = tutti).
+func filterBySubArea(results []*phonebook.ContactWithGroups, sub string) []*phonebook.ContactWithGroups {
+	if sub == "" {
+		return results
+	}
+	out := make([]*phonebook.ContactWithGroups, 0, len(results))
+	for _, r := range results {
+		for _, t := range r.SubAreas {
+			if t.Key == sub {
+				out = append(out, r)
+				break
+			}
+		}
+	}
+	return out
 }

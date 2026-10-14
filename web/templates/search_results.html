@@ -55,6 +55,7 @@
            onclick="document.getElementById('contact-modal').removeAttribute('hidden')">
             <div class="name">
                 {{.Contact.DisplayName}}
+                {{range .SubAreas}}<span class="sub-tag">{{.Name}}</span>{{end}}
             </div>
             {{if .Contact.Description}}<div class="role">{{.Contact.Description}}</div>{{end}}
         </a>

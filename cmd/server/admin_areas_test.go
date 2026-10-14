@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/arearules"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/phonebook"
 )
 
 func TestParseRuleForm(t *testing.T) {
@@ -23,5 +25,21 @@ func TestParseRuleForm(t *testing.T) {
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if _, err := parseRuleForm(r); !errors.Is(err, arearules.ErrInvalidRule) {
 		t.Errorf("err = %v, want ErrInvalidRule", err)
+	}
+}
+
+func TestFilterBySubArea(t *testing.T) {
+	results := []*phonebook.ContactWithGroups{
+		{Contact: &database.Contact{UID: "a"}, SubAreas: []phonebook.SubAreaTag{{Key: "dirigenti"}, {Key: "pc"}}},
+		{Contact: &database.Contact{UID: "b"}},
+	}
+	if got := filterBySubArea(results, "pc"); len(got) != 1 || got[0].Contact.UID != "a" {
+		t.Errorf("pc = %+v", got)
+	}
+	if got := filterBySubArea(results, "inesistente"); len(got) != 0 {
+		t.Errorf("sotto-area inesistente = %d risultati, want 0", len(got))
+	}
+	if got := filterBySubArea(results, ""); len(got) != 2 {
+		t.Errorf("senza filtro = %d", len(got))
 	}
 }

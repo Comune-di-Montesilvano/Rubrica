@@ -453,11 +453,18 @@ func railData() map[string]interface{} {
 	if err != nil {
 		log.Printf("[RAIL] Failed to list areas: %v", err)
 	}
+	subCounts, err := db.CountBySubArea()
+	if err != nil {
+		log.Printf("[RAIL] Failed to count by sub-area: %v", err)
+		subCounts = map[string]int{}
+	}
 
 	return map[string]interface{}{
-		"AreaCounts": counts,
-		"Total":      total,
-		"Areas":      areas,
+		"AreaCounts":    counts,
+		"SubAreaCounts": subCounts,
+		"AreaNodes":     database.BuildAreaNodes(areas),
+		"Total":         total,
+		"Areas":         areas,
 		"AppVersion": AppVersion,
 	}
 }
@@ -465,6 +472,7 @@ func railData() map[string]interface{} {
 func handleIndex(w http.ResponseWriter, r *http.Request) {
 	locale := i18n.ResolveLocale(r)
 	activeArea := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("group")))
+	activeSub := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sub")))
 
 	prefix, _ := db.GetConfig(ldap.PrimaryNumberPrefixConfigKey)
 	if prefix == "" {
@@ -477,6 +485,8 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 	data["Locale"] = locale
 	data["ActiveArea"] = activeArea
 	data["InitialGroup"] = activeArea
+	data["ActiveSub"] = activeSub
+	data["InitialSub"] = activeSub
 	data["Username"] = sessionAdminUsername(r)
 	data["Section"] = "contacts"
 	data["PrefixHelperText"] = i18n.T(locale, "prefix_helper", prefixDigits)
@@ -486,6 +496,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 func handleSearch(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	groupFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("group")))
+	subFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sub")))
 
 	var (
 		results []*phonebook.ContactWithGroups
@@ -503,6 +514,17 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
+
+	names := map[string]string{}
+	if areas, err := db.ListAreas(); err == nil {
+		for _, a := range areas {
+			names[a.Key] = a.Name
+		}
+	}
+	if err := pbService.AttachSubAreas(results, names); err != nil {
+		log.Printf("[SEARCH] Failed to load sub-areas: %v", err)
+	}
+	results = filterBySubArea(results, subFilter)
 
 	if groupFilter != "" {
 		filtered := make([]*phonebook.ContactWithGroups, 0, len(results))
@@ -530,7 +552,7 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 	// Un filtro testuale le riguarda comunque: cerca anche per
 	// numero/nome del gruppo.
 	var callGroups []*phonebook.GroupWithMembers
-	if groupFilter == "" || groupFilter == "uffici" {
+	if subFilter == "" && (groupFilter == "" || groupFilter == "uffici") {
 		allGroups, err := pbService.ListGroupsWithMembers()
 		if err != nil {
 			log.Printf("[SEARCH] Failed to list call groups: %v", err)

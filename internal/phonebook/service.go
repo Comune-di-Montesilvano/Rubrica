@@ -7,10 +7,40 @@ import (
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
 )
 
+// SubAreaTag: sotto-area mostrata come etichetta sulla riga contatto.
+type SubAreaTag struct {
+	Key  string
+	Name string
+}
+
 // ContactWithGroups represents a contact with its associated groups
 type ContactWithGroups struct {
-	Contact *database.Contact
-	Groups  []*database.GroupNumber
+	Contact  *database.Contact
+	Groups   []*database.GroupNumber
+	SubAreas []SubAreaTag
+}
+
+// AttachSubAreas carica con una sola query le sotto-aree di tutti i
+// risultati; names: key → nome visualizzato.
+func (s *Service) AttachSubAreas(results []*ContactWithGroups, names map[string]string) error {
+	ids := make([]int64, 0, len(results))
+	for _, r := range results {
+		ids = append(ids, r.Contact.ID)
+	}
+	byID, err := s.db.ListSubAreasForContacts(ids)
+	if err != nil {
+		return err
+	}
+	for _, r := range results {
+		for _, k := range byID[r.Contact.ID] {
+			name := names[k]
+			if name == "" {
+				name = k
+			}
+			r.SubAreas = append(r.SubAreas, SubAreaTag{Key: k, Name: name})
+		}
+	}
+	return nil
 }
 
 // Service provides business logic for phonebook operations

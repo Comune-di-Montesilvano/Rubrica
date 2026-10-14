@@ -1,7 +1,9 @@
 package phonebook
 
 import (
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
 )
@@ -126,5 +128,36 @@ func TestBuildGroupCategoryTreeEmptyInput(t *testing.T) {
 	tree, uncategorized := BuildGroupCategoryTree(nil, nil)
 	if len(tree) != 0 || len(uncategorized) != 0 {
 		t.Errorf("got tree=%v uncategorized=%v for nil input, want both empty", tree, uncategorized)
+	}
+}
+
+func newTestDB(t *testing.T) *database.DB {
+	t.Helper()
+	db, err := database.InitDB(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+func TestAttachSubAreas(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.CreateArea(&database.Area{Key: "dirigenti", Name: "Dirigenti", ParentKey: "interni"}); err != nil {
+		t.Fatal(err)
+	}
+	c := &database.Contact{UID: "u", DisplayName: "U", Email: "u@x.it", Area: "interni", LastSync: time.Now()}
+	db.UpsertContact(c)
+	id, _, _ := db.ContactIDAndArea("u")
+	db.SetContactSubAreas(id, []string{"dirigenti"})
+	got, _ := db.GetContact("u")
+
+	s := NewService(db)
+	results := []*ContactWithGroups{{Contact: got}}
+	if err := s.AttachSubAreas(results, map[string]string{"dirigenti": "Dirigenti"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(results[0].SubAreas) != 1 || results[0].SubAreas[0] != (SubAreaTag{Key: "dirigenti", Name: "Dirigenti"}) {
+		t.Errorf("SubAreas = %+v", results[0].SubAreas)
 	}
 }
