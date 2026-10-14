@@ -1,1 +1,20 @@
 <div class="section-head"><h3>Perimetro della rubrica</h3></div>
+<p class="helptext" style="margin:8px 0 12px;">Solo gli utenti AD che soddisfano queste regole entrano in rubrica. Nessuna regola = tutti gli utenti AD. Gli account disattivati entrano comunque (servono alla diagnostica del centralino) ma non sono mai pubblici. Le modifiche si applicano al prossimo sync orario, oppure subito con «Applica ora».</p>
+
+{{if .StaleHeld}}
+<div class="alert-warning" role="alert">
+    <strong>Calo anomalo:</strong> all'ultimo sync {{.StaleHeld}} contatti sarebbero usciti dalla rubrica. La cancellazione è sospesa.
+    Controlla le regole e l'anteprima, poi
+    <button hx-post="/admin/scope/apply" hx-vals='{"force":"1"}' hx-target="#scope-sync-status" hx-swap="innerHTML"
+            hx-confirm="Confermi? I contatti fuori perimetro verranno tolti dalla rubrica." class="btn-danger">Conferma e applica</button>
+</div>
+{{end}}
+
+{{template "admin_rules.html" .ScopeRules}}
+
+<div class="field-row" style="margin-top:10px;">
+    <button hx-get="/admin/scope/preview" hx-target="#scope-preview" hx-swap="innerHTML" class="btn btn-ghost">Anteprima</button>
+    <button hx-post="/admin/scope/apply" hx-target="#scope-sync-status" hx-swap="innerHTML" class="btn btn-primary">Applica ora</button>
+</div>
+<div id="scope-preview" hx-get="/admin/scope/preview" hx-trigger="load" hx-swap="innerHTML"></div>
+<div id="scope-sync-status"></div>

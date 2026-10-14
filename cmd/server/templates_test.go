@@ -115,3 +115,38 @@ func TestAdminSuggestionsRender(t *testing.T) {
 		t.Errorf("suggerimento non reso o non escapato: %s", buf.String())
 	}
 }
+
+func TestAdminScopeRendersHeldWarning(t *testing.T) {
+	tpl := template.Must(template.New("").ParseFiles("../../web/templates/admin_scope.html", "../../web/templates/admin_rules.html"))
+	data := map[string]interface{}{
+		"ScopeRules": rulesBlock{PostURL: "/admin/scope/rules", DeleteURLPrefix: "/admin/scope/rules/", Target: "#scope-content", FormID: "scope"},
+		"StaleHeld":  42,
+	}
+	var buf bytes.Buffer
+	if err := tpl.ExecuteTemplate(&buf, "admin_scope.html", data); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	html := buf.String()
+	for _, want := range []string{"42 contatti", `hx-vals='{"force":"1"}'`, `hx-get="/admin/scope/preview"`, "Nessuna regola = tutti"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("manca %q", want)
+		}
+	}
+	if strings.Contains(html, `value="range"`) {
+		t.Error("il perimetro non deve offrire regole range")
+	}
+}
+
+func TestAdminScopePreviewRenders(t *testing.T) {
+	tpl := template.Must(template.New("").ParseFiles("../../web/templates/admin_scope_preview.html"))
+	data := map[string]interface{}{"Preview": ldap.ScopePreview{In: 250, Current: 248, Entering: []string{"Nuovo"}, Leaving: []string{"Uscente"}, MoreLeaving: 3}}
+	var buf bytes.Buffer
+	if err := tpl.ExecuteTemplate(&buf, "admin_scope_preview.html", data); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, want := range []string{"250", "248", "Nuovo", "Uscente", "altri 3"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("manca %q", want)
+		}
+	}
+}

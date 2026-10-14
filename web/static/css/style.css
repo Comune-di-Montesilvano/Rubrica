@@ -447,3 +447,5 @@ td.num { font-family: 'IBM Plex Mono'; font-variant-numeric: tabular-nums; font-
 .suggest-item:hover { background: var(--accent-tint); }
 .member-list { columns: 2; padding-left: 18px; margin: 6px 0; }
 .form-error { color: var(--danger, #b42318); margin: 6px 0; }
+.alert-warning { border: 1px solid #f0b429; background: #fff8e6; border-radius: 6px; padding: 10px 12px; margin: 8px 0 12px; }
+.scope-preview { margin-top: 10px; }

@@ -217,9 +217,80 @@ func handleAdminDeleteArea(w http.ResponseWriter, r *http.Request) {
 	renderAdminAreas(w, r)
 }
 
-// scopeData: dati della sezione Perimetro (completata nel Task 9).
+// scopeData: dati della sezione Perimetro.
 func scopeData() (map[string]interface{}, error) {
-	return map[string]interface{}{}, nil
+	rules, err := db.ListScopeRules()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"ScopeRules": rulesBlock{
+			Rules:           ruleViews(rules),
+			PostURL:         "/admin/scope/rules",
+			DeleteURLPrefix: "/admin/scope/rules/",
+			Target:          "#scope-content",
+			FormID:          "scope",
+		},
+		"StaleHeld": getLastSyncReport().StaleHeld,
+	}, nil
+}
+
+func renderScope(w http.ResponseWriter, r *http.Request, ruleErr string) {
+	data, err := scopeData()
+	if err != nil {
+		http.Error(w, "Failed to load scope", http.StatusInternalServerError)
+		return
+	}
+	if ruleErr != "" {
+		b := data["ScopeRules"].(rulesBlock)
+		b.Error = ruleErr
+		data["ScopeRules"] = b
+	}
+	data["Messages"] = i18n.GetMessages(i18n.ResolveLocale(r))
+	templates.ExecuteTemplate(w, "admin_scope.html", data)
+}
+
+// Le modifiche al perimetro NON avviano il sync: prima si guarda
+// l'anteprima, poi "Applica ora" (o il sync orario).
+func handleAdminAddScopeRule(w http.ResponseWriter, r *http.Request) {
+	rule, err := parseRuleForm(r)
+	if err == nil && rule.Kind == arearules.KindRange {
+		err = fmt.Errorf("%w: il perimetro vale solo per gli utenti AD, i range di interni non si applicano", arearules.ErrInvalidRule)
+	}
+	if err != nil {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		renderScope(w, r, err.Error())
+		return
+	}
+	if err := db.AddScopeRule(rule); err != nil {
+		log.Printf("[ADMIN] Failed to add scope rule: %v", err)
+	}
+	renderScope(w, r, "")
+}
+
+func handleAdminDeleteScopeRule(w http.ResponseWriter, r *http.Request) {
+	rid, _ := strconv.ParseInt(mux.Vars(r)["rid"], 10, 64)
+	if err := db.DeleteScopeRule(rid); err != nil {
+		log.Printf("[ADMIN] Failed to delete scope rule: %v", err)
+	}
+	renderScope(w, r, "")
+}
+
+func handleAdminScopePreview(w http.ResponseWriter, r *http.Request) {
+	data := map[string]interface{}{}
+	p, err := ldap.PreviewScope(db, cfg)
+	if err != nil {
+		log.Printf("[ADMIN] Anteprima perimetro: %v", err)
+		data["Error"] = "AD non disponibile: anteprima non calcolabile."
+	} else {
+		data["Preview"] = p
+	}
+	templates.ExecuteTemplate(w, "admin_scope_preview.html", data)
+}
+
+func handleAdminScopeApply(w http.ResponseWriter, r *http.Request) {
+	startLDAPSync(r.FormValue("force") == "1")
+	renderSyncStatus(w, r)
 }
 
 type ruleView struct {
