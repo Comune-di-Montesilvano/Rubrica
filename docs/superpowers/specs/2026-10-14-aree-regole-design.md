@@ -25,7 +25,10 @@ sul modello dei "gruppi della plancia" di CruscottoPA
 
 - Un solo motore di regole per aree di primo livello e sotto-aree.
 - Un livello di annidamento (area → sotto-area).
-- Regole valutate **nel sync**, risultato salvato su `contacts`; salvare una
+- Un contatto ha **una sola area** (vince la prima in ordine) ma **zero o più
+  sotto-aree** dell'area: tutte quelle le cui regole soddisfa. Le sotto-aree
+  possono sovrapporsi (es. `Dirigente` + `Protezione civile`).
+- Regole valutate **nel sync**, risultato salvato nel DB; salvare una
   regola avvia subito un sync.
 - `/admin/ou-mapping` confluisce in `/admin/areas`.
 - CardDAV: una rubrica per area/sotto-area, `LDAP_OU_FILTERS` eliminato.
@@ -54,8 +57,12 @@ CREATE TABLE IF NOT EXISTS area_rules (
     created_at DATETIME NOT NULL
 );
 
--- contacts: nuova colonna
-sub_area TEXT NOT NULL DEFAULT ''
+-- sotto-aree di un contatto (molti-a-molti)
+CREATE TABLE IF NOT EXISTS contact_sub_areas (
+    contact_id   INTEGER NOT NULL REFERENCES contacts(id),
+    sub_area_key TEXT NOT NULL,
+    PRIMARY KEY (contact_id, sub_area_key)
+);
 
 -- perimetro della rubrica (chi entra nel sync LDAP), stesse colonne
 CREATE TABLE IF NOT EXISTS scope_rules (
@@ -115,9 +122,10 @@ type Node struct {
     Children []Node // ordinati per sort
 }
 
-// Resolve: prima area di primo livello (in ordine) di cui p è membro, poi
-// prima sotto-area di quell'area di cui p è membro. "" se nessuna.
-func Resolve(p Profile, tree []Node) (area, subArea string)
+// Resolve: prima area di primo livello (in ordine) di cui p è membro ("" se
+// nessuna), poi TUTTE le sotto-aree di quell'area di cui p è membro, in
+// ordine di sort (nil se nessuna).
+func Resolve(p Profile, tree []Node) (area string, subAreas []string)
 ```
 
 - Profili senza dati AD (PBX, gruppi di chiamata) soddisfano solo `range`;
@@ -142,8 +150,10 @@ func Resolve(p Profile, tree []Node) (area, subArea string)
    perimetro = nessun filtro (come oggi con `LDAP_ALLOWED_GROUPS` vuoto).
    Gli account `disabled` non passano dal filtro di perimetro (comportamento
    attuale: AD svuota spesso il `memberOf` di chi viene disabilitato);
-5. per ogni utente ammesso chiama `Resolve` → `contacts.area`,
-   `contacts.sub_area`. Nessuna area → `""` (comportamento attuale).
+5. per ogni utente ammesso chiama `Resolve` → `contacts.area` e righe di
+   `contact_sub_areas` (sostituite in blocco per quel contatto: delete +
+   insert nella stessa transazione dell'upsert). Nessuna area → `""`
+   (comportamento attuale), nessuna sotto-area → nessuna riga.
    Department vuoto → nome dell'area (oggi solo per i match da range; ora
    per qualsiasi regola — cambio voluto: nessun contatto senza etichetta);
 6. sostituisce `deriveArea` e `MatchExtensionRange` (rimossi);
@@ -162,7 +172,8 @@ Nuova `ReapplyRangeAreas(db)`: riapplica `Resolve` a contatti `source='pbx'`
 e `group_numbers` dal DB, senza scraping.
 
 Contatti `source='manual'`: area/sotto-area scelte a mano in
-`/admin/local-contacts` (aggiungere il selettore di sotto-area), mai toccate
+`/admin/local-contacts` (aggiungere checkbox multiple delle sotto-aree
+dell'area scelta), mai toccate
 dalle regole.
 
 **Dopo ogni modifica a regole o albero** (create/update/delete/sposta):
@@ -206,8 +217,11 @@ la voce nella rail.
 
 **Elenco:** albero aree → sotto-aree; per ognuna nome, key, numero regole,
 numero contatti; nuova (area o sotto-area di …), rinomina, su/giù, elimina.
-Eliminare un'area elimina sotto-aree e regole e azzera `area`/`sub_area`
-dei contatti che la usavano.
+Eliminare un'area elimina sotto-aree e regole, azzera `area` dei contatti
+che la usavano ed elimina le righe `contact_sub_areas` delle sue
+sotto-aree. Eliminare una sotto-area elimina le sue righe
+`contact_sub_areas`. Il `sort` delle sotto-aree decide solo l'ordine di
+visualizzazione (rail e tag), non la precedenza.
 
 **Dettaglio area** (`/admin/areas/{id}`):
 
@@ -240,20 +254,26 @@ in rubrica. Nessuna regola = tutti gli utenti AD".
 - `railData()` fornisce l'albero e i conteggi per area e sotto-area.
 - `rail.html`: sotto-aree come voci indentate sotto la madre, in entrambe
   le varianti (bottoni HTMX e link).
-- `/search?group=<area>&sub=<sub>`: filtro su `contacts.sub_area`; con `sub`
+- `/search?group=<area>&sub=<sub>`: filtro sui contatti con una riga
+  `contact_sub_areas` per `<sub>`; con `sub`
   i gruppi di chiamata non sono mostrati. L'area madre mostra tutti i suoi
   contatti.
-- `CountByArea` affiancato da conteggio per sotto-area.
+- `CountByArea` affiancato da conteggio per sotto-area (contatti attivi
+  distinti). Poiché le sotto-aree si sovrappongono, la somma dei conteggi
+  delle sotto-aree può superare quello dell'area: è atteso.
 - **Tag sotto-area**: nella riga contatto di `search_results.html`, accanto
-  al nome, un'etichetta con il nome della sotto-area (es. `Dirigente`)
-  se `sub_area` non è vuota; nessun tag altrimenti. Il nome arriva al
-  template tramite una mappa key → nome passata nei dati di ricerca. Stile:
-  pillola piccola, coerente con le altre etichette della riga.
+  al nome, un'etichetta per ogni sotto-area del contatto (es. `Dirigente`
+  `Protezione civile`), in ordine di `sort`; nessun tag se non ne ha.
+  `ContactWithGroups` riceve `SubAreas []SubAreaLabel{Key, Name}`, caricate
+  in un'unica query per tutti i risultati (niente N+1). Stile: pillola
+  piccola, coerente con le altre etichette della riga.
 
 ## 6. CardDAV
 
 - `/carddav/{book}/`: `book` = key di area di primo livello (tutti i contatti
-  con quella `area`) o di sotto-area (contatti con quella `sub_area`); key
+  con quella `area`) o di sotto-area (contatti con una riga
+  `contact_sub_areas` per quella key: un contatto può stare in più
+  rubriche); key
   sconosciuta → 404. `""`/`all` invariati.
 - Rimossi `LDAPOUFilters`, `defaultOUFilters`, `LDAP_OU_FILTERS`
   (`.env.example`, `docker-compose.yml`, `config.go`) e il match per
@@ -292,11 +312,14 @@ in rubrica. Nessuna regola = tutti gli utenti AD".
 
 - `arearules`: `Member` per ogni tipo, exclude vince, requisiti AND,
   maiuscole/spazi, DN equivalenti, `range` con interni multipli e non
-  numerici, area senza regole; `Resolve` precedenza area e sotto-area,
+  numerici, area senza regole; `Resolve`: precedenza tra aree, più
+  sotto-aree restituite tutte in ordine, sotto-aree di un'altra area
+  ignorate,
   profilo PBX (solo range).
 - `database`: migrazione da `ou_area_mapping` + range (una sola volta,
   idempotente), CRUD regole, cascade eliminazione area, `sort`, rifiuto
-  annidamento a due livelli, `sub_area` con default `''`.
+  annidamento a due livelli, `contact_sub_areas` sostituite in blocco al
+  sync e ripulite all'eliminazione di area/sotto-area.
 - `ldap`: costruzione filtro in-chain con escape; elenco attributi richiesti.
 - `carddav`: rubrica per area, per sotto-area, key sconosciuta 404.
 - `ldap`: perimetro (nessuna regola = tutti, utente fuori scartato,
