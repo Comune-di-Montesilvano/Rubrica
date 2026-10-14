@@ -29,8 +29,14 @@ sul modello dei "gruppi della plancia" di CruscottoPA
   regola avvia subito un sync.
 - `/admin/ou-mapping` confluisce in `/admin/areas`.
 - CardDAV: una rubrica per area/sotto-area, `LDAP_OU_FILTERS` eliminato.
-- Fuori scope: `LDAP_ALLOWED_GROUPS` in UI (spec successiva), badge ruolo
-  sulla riga contatto, LDAP telefoni, formato vCard.
+- Anche il **perimetro della rubrica** (chi entra nel sync, oggi
+  `LDAP_ALLOWED_GROUPS` in `.env`) diventa un insieme di regole da UI, con
+  le stesse regole e protezioni contro lo svuotamento accidentale.
+  `LDAP_ALLOWED_GROUPS` eliminato.
+- **Tag della sotto-area** sulla riga contatto nella rubrica pubblica.
+- Fuori scope (voluto): server LDAP dei telefoni — il telefono deve solo
+  mostrare il nome di chi chiama, nessuna area/sotto-area esposta; formato
+  vCard invariato.
 
 ## 1. Dati
 
@@ -50,6 +56,15 @@ CREATE TABLE IF NOT EXISTS area_rules (
 
 -- contacts: nuova colonna
 sub_area TEXT NOT NULL DEFAULT ''
+
+-- perimetro della rubrica (chi entra nel sync LDAP), stesse colonne
+CREATE TABLE IF NOT EXISTS scope_rules (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT NOT NULL,
+    attr       TEXT NOT NULL DEFAULT '',
+    value      TEXT NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL
+);
 ```
 
 - `parent_key` di una sotto-area punta a un'area di primo livello; una
@@ -114,18 +129,31 @@ func Resolve(p Profile, tree []Node) (area, subArea string)
 
 `ldap.SyncContacts`:
 
-1. carica albero aree + regole;
+1. carica albero aree + regole e regole di perimetro;
 2. attributi richiesti ad AD = quelli già sincronizzati ∪ attributi citati
    da regole `attr`/`present`/`absent`;
 3. per ogni DN citato da regole `adgroup`: una ricerca
    `(memberOf:1.2.840.113556.1.4.1941:=<DN escaped>)` → insieme dei DN
    utenti membri (annidati compresi). Gruppo inesistente o errore: log
    `[SYNC]`, insieme vuoto, sync prosegue;
-4. per ogni utente costruisce `Profile` e chiama `Resolve` → `contacts.area`,
+4. per ogni utente costruisce `Profile`; se ci sono regole di perimetro e
+   l'utente non è `Member` delle regole di perimetro, viene scartato (come
+   oggi con `isEntryAllowedByGroups`, che viene rimossa). Nessuna regola di
+   perimetro = nessun filtro (come oggi con `LDAP_ALLOWED_GROUPS` vuoto).
+   Gli account `disabled` non passano dal filtro di perimetro (comportamento
+   attuale: AD svuota spesso il `memberOf` di chi viene disabilitato);
+5. per ogni utente ammesso chiama `Resolve` → `contacts.area`,
    `contacts.sub_area`. Nessuna area → `""` (comportamento attuale).
    Department vuoto → nome dell'area (oggi solo per i match da range; ora
    per qualsiasi regola — cambio voluto: nessun contatto senza etichetta);
-5. sostituisce `deriveArea` e `MatchExtensionRange` (rimossi).
+6. sostituisce `deriveArea` e `MatchExtensionRange` (rimossi);
+7. **protezione svuotamento**: prima di `SoftDeleteStale`, se i contatti LDAP
+   attivi che verrebbero soft-deleted sono più del 20% di quelli attivi
+   (e almeno 5), il soft-delete **non** viene eseguito: lo stato del sync
+   riporta "Calo anomalo: N contatti uscirebbero dalla rubrica" e in
+   `/admin/areas` → Perimetro compare il pulsante "Conferma e applica", che
+   rilancia il sync con il soft-delete forzato. Upsert e aree vengono
+   comunque aggiornati.
 
 `pbx.ApplyPeers` / `pbx.ApplyCallGroups`: area dai soli `range` tramite
 `Resolve` con profilo senza dati AD.
@@ -151,6 +179,19 @@ In `migrate()`, se `app_config` non ha `area_rules_migrated=1`:
   `range`;
 - imposta `sort` delle aree esistenti in ordine alfabetico;
 - scrive `area_rules_migrated=1`.
+
+Perimetro: la conversione richiede AD (i CN di `LDAP_ALLOWED_GROUPS` vanno
+risolti in DN), quindi avviene **al primo sync** dopo il deploy, se
+`app_config` non ha `scope_rules_migrated=1`: ogni CN di
+`LDAP_ALLOWED_GROUPS` viene cercato in AD (`(&(objectClass=group)(cn=<CN>))`)
+e il DN trovato diventa una regola `adgroup`; un CN inesistente viene
+scartato con log (es. `all_users-servizi_esterni`, che non esiste). Poi
+`scope_rules_migrated=1`. Da quel momento la variabile è ignorata e va tolta
+da `.env.example`, `docker-compose.yml` e `config.go`.
+
+Differenza: oggi conta solo la membership diretta, `adgroup` include gli
+annidati. Verificato il 2026-10-14 su `ALL_USERS-SERVIZI_INTERNI`: 248
+diretti, 248 con annidati — nessun cambio.
 
 Risultato atteso: stesse aree di prima su tutti i contatti. Unica differenza
 nota: `ou` ora corrisponde a qualsiasi OU del DN, non solo alla prima non
@@ -182,6 +223,18 @@ dei contatti che la usavano.
 - membri attuali (max 30 nomi + totale) da `contacts`;
 - se l'area ha sotto-aree: contatti dell'area "senza sottogruppo".
 
+**Perimetro della rubrica** (sezione in cima a `/admin/areas`): stesse
+regole e stessi suggerimenti delle aree, tipi `ou`, `attr`, `adgroup`,
+`user`, `exclude`, `present`, `absent` (niente `range`: vale solo per AD).
+Testo esplicativo: "Solo gli utenti AD che soddisfano queste regole entrano
+in rubrica. Nessuna regola = tutti gli utenti AD".
+
+- **Anteprima** prima di applicare: esegue ricerca AD + valutazione senza
+  scrivere nulla e mostra "Con queste regole entrano N utenti attivi (oggi
+  M in rubrica)", più fino a 30 nomi di chi entrerebbe e di chi uscirebbe.
+- Le modifiche al perimetro avviano il sync come le altre regole, soggetto
+  alla protezione svuotamento (sezione 3).
+
 ## 5. Rubrica pubblica
 
 - `railData()` fornisce l'albero e i conteggi per area e sotto-area.
@@ -191,6 +244,11 @@ dei contatti che la usavano.
   i gruppi di chiamata non sono mostrati. L'area madre mostra tutti i suoi
   contatti.
 - `CountByArea` affiancato da conteggio per sotto-area.
+- **Tag sotto-area**: nella riga contatto di `search_results.html`, accanto
+  al nome, un'etichetta con il nome della sotto-area (es. `Dirigente`)
+  se `sub_area` non è vuota; nessun tag altrimenti. Il nome arriva al
+  template tramite una mappa key → nome passata nei dati di ricerca. Stile:
+  pillola piccola, coerente con le altre etichette della riga.
 
 ## 6. CardDAV
 
@@ -213,11 +271,16 @@ dei contatti che la usavano.
 | Area senza regole | nessun membro (salvo manuali) |
 | Nome attributo non valido / range malformato | 422 con messaggio |
 | Sotto-area di una sotto-area | 422 |
+| Perimetro: troppi contatti in uscita | soft-delete sospeso, avviso + "Conferma e applica" |
+| AD giù durante l'anteprima del perimetro | messaggio "AD non disponibile", nessuna modifica |
 | Sync già in corso al salvataggio | nessun secondo sync; la modifica è presa dal sync in corso o dal prossimo (flag "risincronizza al termine") |
 
 ## 8. Rollout
 
-1. Deploy: migrazione → stesse aree di prima, nessun effetto visibile.
+1. Deploy: migrazione → stesse aree di prima, nessun effetto visibile. Al
+   primo sync `LDAP_ALLOWED_GROUPS` diventa regole di perimetro; verificare
+   in `/admin/areas` → Perimetro, poi togliere la variabile dallo stack
+   Portainer.
 2. Admin rinomina `interni` in "Personale comunale".
 3. Crea le sotto-aree e le regole (es. Dirigenti = gruppo AD
    `RUBRICA_DIRIGENTI` oppure `description = Dirigente`; Collaboratori = …).
@@ -236,9 +299,16 @@ dei contatti che la usavano.
   annidamento a due livelli, `sub_area` con default `''`.
 - `ldap`: costruzione filtro in-chain con escape; elenco attributi richiesti.
 - `carddav`: rubrica per area, per sotto-area, key sconosciuta 404.
-- `main`: `/search` con `group`+`sub`; avvio sync dopo modifica regole.
+- `ldap`: perimetro (nessuna regola = tutti, utente fuori scartato,
+  disabled non filtrato), protezione svuotamento (sotto/sopra soglia,
+  forzatura), migrazione `LDAP_ALLOWED_GROUPS` (CN trovato/inesistente,
+  una sola volta).
+- `main`: `/search` con `group`+`sub`; tag sotto-area nel risultato; avvio
+  sync dopo modifica regole; anteprima perimetro con directory finta.
 
 ## 10. Documentazione
 
 Aggiornare `CLAUDE.md` (bullet Areas, `internal/ldap`, `internal/carddav`,
-rimozione `LDAP_OU_FILTERS`), `.env.example`, `docker-compose.yml`.
+rimozione `LDAP_OU_FILTERS` e `LDAP_ALLOWED_GROUPS`, perimetro e protezione
+svuotamento), `.env.example`, `docker-compose.yml`, memoria "Gruppi AD vs
+filtro sync" (diventa obsoleta).
