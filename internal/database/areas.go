@@ -400,8 +400,12 @@ func (db *DB) migrateAreaRules() error {
 		}
 	}
 
+	// Precedenza: prima le aree con regole ou (prima della migrazione l'OU
+	// mapping vinceva sempre sul range), poi le altre; alfabetico dentro
+	// ciascun gruppo.
 	var ids []int64
-	rows, err = db.Query(`SELECT id FROM areas ORDER BY name`)
+	rows, err = db.Query(`SELECT id FROM areas ORDER BY
+		(SELECT COUNT(*) FROM area_rules r WHERE r.area_id = areas.id AND r.kind = 'ou') = 0, name`)
 	if err != nil {
 		return err
 	}

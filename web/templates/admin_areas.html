@@ -1,6 +1,7 @@
 <div class="section-head">
     <h3>Aree e sotto-aree</h3>
 </div>
+{{if .Error}}<p class="form-error" role="alert">{{.Error}}</p>{{end}}
 <p class="helptext" style="margin:8px 0 12px;">Ogni contatto finisce nella <strong>prima</strong> area, in quest'ordine, di cui soddisfa le regole; poi in <strong>tutte</strong> le sotto-aree di quell'area di cui soddisfa le regole. Le regole si modificano aprendo l'area. Ogni modifica avvia subito un sync.</p>
 
 {{$m := .Messages}}{{$rc := .RuleCounts}}{{$ac := .AreaCounts}}{{$sc := .SubAreaCounts}}

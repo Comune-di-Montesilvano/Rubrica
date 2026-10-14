@@ -26,10 +26,20 @@ import (
 var (
 	syncReportMu   sync.Mutex
 	lastSyncReport ldap.SyncReport
-	// syncRerun: una modifica alle regole arrivata durante un sync in corso
-	// fa ripartire il sync al termine, invece di avviarne un secondo in
-	// parallelo. Protetto da ldapManualSync.mu.
-	syncRerun bool
+
+	// syncRunMu serializza ogni esecuzione di ldap.Sync (manuale, orario,
+	// iniziale): mai due sync in parallelo.
+	syncRunMu sync.Mutex
+	// syncRerun/syncRerunForce: una richiesta arrivata durante un sync
+	// manuale in corso lo fa ripartire al termine (con force se una delle
+	// richieste lo chiedeva). Protetti da ldapManualSync.mu.
+	syncRerun      bool
+	syncRerunForce bool
+
+	// ldapSyncFn è il sync vero; sostituibile nei test.
+	ldapSyncFn = func(opts ldap.SyncOptions, onProgress func(done, total int)) (ldap.SyncReport, error) {
+		return ldap.Sync(db, cfg, opts, onProgress)
+	}
 )
 
 func setLastSyncReport(r ldap.SyncReport) {
@@ -47,7 +57,9 @@ func getLastSyncReport() ldap.SyncReport {
 // runLDAPSync esegue un sync e ne registra esito e report (usato da worker
 // orario, sync iniziale e sync manuali).
 func runLDAPSync(opts ldap.SyncOptions, onProgress func(done, total int)) error {
-	report, err := ldap.Sync(db, cfg, opts, onProgress)
+	syncRunMu.Lock()
+	defer syncRunMu.Unlock()
+	report, err := ldapSyncFn(opts, onProgress)
 	if err != nil {
 		return err
 	}
@@ -62,11 +74,17 @@ func startLDAPSync(force bool) {
 	ldapManualSync.mu.Lock()
 	if ldapManualSync.Running {
 		syncRerun = true
+		syncRerunForce = syncRerunForce || force
 		ldapManualSync.mu.Unlock()
 		return
 	}
+	// Controllo e avvio nella stessa sezione critica: due richieste
+	// simultanee non possono avviare due sync.
+	ldapManualSync.Running = true
+	ldapManualSync.Phase = "Avvio..."
+	ldapManualSync.Message = ""
+	ldapManualSync.IsError = false
 	ldapManualSync.mu.Unlock()
-	ldapManualSync.start()
 	go func() {
 		for {
 			err := runLDAPSync(ldap.SyncOptions{Force: force}, func(done, total int) {
@@ -79,15 +97,20 @@ func startLDAPSync(force bool) {
 			} else {
 				log.Printf("[SYNC] Manual sync completed")
 			}
+			// La decisione di ripartire e la chiusura dello stato avvengono
+			// sotto lo stesso lock: una richiesta arrivata nel frattempo o
+			// trova Running=true e imposta il rerun (che qui vediamo), o
+			// trova Running=false e avvia un sync suo.
 			ldapManualSync.mu.Lock()
-			again := syncRerun
-			syncRerun = false
-			ldapManualSync.mu.Unlock()
-			if !again {
-				ldapManualSync.finish(err)
-				return
+			if syncRerun {
+				force = syncRerunForce
+				syncRerun, syncRerunForce = false, false
+				ldapManualSync.mu.Unlock()
+				continue
 			}
-			force = false
+			ldapManualSync.finishLocked(err)
+			ldapManualSync.mu.Unlock()
+			return
 		}
 	}()
 }
@@ -131,12 +154,17 @@ func areasPageData() (map[string]interface{}, error) {
 	}, nil
 }
 
-func renderAdminAreas(w http.ResponseWriter, r *http.Request) {
+// Gli errori di validazione tornano con 200 nel frammento: htmx 2 non fa
+// lo swap delle risposte 4xx e il messaggio non comparirebbe.
+func renderAdminAreas(w http.ResponseWriter, r *http.Request) { renderAdminAreasErr(w, r, "") }
+
+func renderAdminAreasErr(w http.ResponseWriter, r *http.Request, errMsg string) {
 	data, err := areasPageData()
 	if err != nil {
 		http.Error(w, "Failed to load areas", http.StatusInternalServerError)
 		return
 	}
+	data["Error"] = errMsg
 	data["Messages"] = i18n.GetMessages(i18n.ResolveLocale(r))
 	templates.ExecuteTemplate(w, "admin_areas.html", data)
 }
@@ -176,10 +204,12 @@ func handleAdminCreateArea(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := db.CreateArea(&database.Area{Key: key, Name: name, ParentKey: parent}); err != nil {
 		if errors.Is(err, database.ErrNestedSubArea) || errors.Is(err, database.ErrParentNotFound) {
-			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			renderAdminAreasErr(w, r, err.Error())
 			return
 		}
 		log.Printf("[ADMIN] Failed to create area %q: %v", name, err)
+		renderAdminAreasErr(w, r, "Impossibile creare l'area (chiave già usata?)")
+		return
 	}
 	renderAdminAreas(w, r)
 }
@@ -208,7 +238,7 @@ func handleAdminMoveArea(w http.ResponseWriter, r *http.Request) {
 
 func handleAdminDeleteArea(w http.ResponseWriter, r *http.Request) {
 	if a, _ := db.GetArea(areaIDFrom(r)); a != nil && a.Key == "uffici" {
-		http.Error(w, "L'area Uffici è riservata ai gruppi di chiamata", http.StatusUnprocessableEntity)
+		renderAdminAreasErr(w, r, "L'area Uffici è riservata ai gruppi di chiamata")
 		return
 	}
 	if err := db.DeleteArea(areaIDFrom(r)); err != nil {
@@ -259,7 +289,6 @@ func handleAdminAddScopeRule(w http.ResponseWriter, r *http.Request) {
 		err = fmt.Errorf("%w: il perimetro vale solo per gli utenti AD, i range di interni non si applicano", arearules.ErrInvalidRule)
 	}
 	if err != nil {
-		w.WriteHeader(http.StatusUnprocessableEntity)
 		renderScope(w, r, err.Error())
 		return
 	}
@@ -413,7 +442,6 @@ func handleAdminAddAreaRule(w http.ResponseWriter, r *http.Request) {
 	}
 	rule, err := parseRuleForm(r)
 	if err != nil {
-		w.WriteHeader(http.StatusUnprocessableEntity)
 		renderAreaDetail(w, r, a, err.Error())
 		return
 	}
@@ -444,7 +472,6 @@ func handleAdminADSuggest(w http.ResponseWriter, r *http.Request) {
 	sugg, err := ldap.Suggest(cfg, r.URL.Query().Get("kind"), r.URL.Query().Get("attr"), r.URL.Query().Get("q"))
 	switch {
 	case errors.Is(err, ldap.ErrInvalidAttr):
-		w.WriteHeader(http.StatusUnprocessableEntity)
 		data["Error"] = "Nome di attributo LDAP non valido"
 	case err != nil:
 		log.Printf("[ADMIN] Suggerimenti AD: %v", err)

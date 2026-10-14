@@ -711,11 +711,21 @@ func (db *DB) UpdateManualContact(c *Contact) error {
 // dato gestito a mano, non sincronizzato) un contatto manuale. Ristretto
 // a source='manual' per non poter mai cancellare un contatto LDAP da qui.
 func (db *DB) DeleteManualContact(uid string) error {
-	_, err := db.Exec(`DELETE FROM contacts WHERE uid = ? AND source = 'manual'`, uid)
+	// Le sotto-aree si cancellano esplicitamente: PRAGMA foreign_keys vale
+	// per singola connessione del pool, il cascade non è garantito.
+	tx, err := db.Begin()
 	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM contact_sub_areas WHERE contact_id IN (SELECT id FROM contacts WHERE uid = ? AND source = 'manual')`, uid); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("failed to delete manual contact sub-areas: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM contacts WHERE uid = ? AND source = 'manual'`, uid); err != nil {
+		tx.Rollback()
 		return fmt.Errorf("failed to delete manual contact: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // ListManualContacts returns all source='manual' contacts, alphabetically.

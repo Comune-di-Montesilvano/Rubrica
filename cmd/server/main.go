@@ -79,6 +79,11 @@ func (s *syncStatus) setPhase(phase string) {
 func (s *syncStatus) finish(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.finishLocked(err)
+}
+
+// finishLocked: come finish, con s.mu già acquisito dal chiamante.
+func (s *syncStatus) finishLocked(err error) {
 	s.Running = false
 	if err != nil {
 		s.IsError = true

@@ -29,8 +29,14 @@ func migrateScopeRules(db *database.DB, groups []string, find func(string) (stri
 	var rules []arearules.Rule
 	for _, g := range groups {
 		dn, err := find(g)
-		if err != nil || dn == "" {
-			log.Printf("[SYNC] Perimetro: gruppo %q di LDAP_ALLOWED_GROUPS non trovato in AD, scartato (%v)", g, err)
+		if err != nil {
+			// Errore di ricerca (AD irraggiungibile, timeout) ≠ gruppo
+			// inesistente: riprova al prossimo sync invece di scartarlo
+			// per sempre.
+			return fmt.Errorf("migrazione perimetro: ricerca del gruppo %q fallita, riprovo al prossimo sync: %w", g, err)
+		}
+		if dn == "" {
+			log.Printf("[SYNC] Perimetro: gruppo %q di LDAP_ALLOWED_GROUPS non trovato in AD, scartato", g)
 			continue
 		}
 		r, err := arearules.Normalize(arearules.KindADGroup, "", dn)

@@ -99,3 +99,24 @@ func TestMigrateScopeRulesEmptyEnv(t *testing.T) {
 		t.Error("env vuota: flag atteso")
 	}
 }
+
+// Review: un errore di ricerca (timeout) non è "gruppo inesistente": la
+// migrazione deve fermarsi senza scrivere il flag, non scartare il gruppo.
+func TestMigrateScopeRulesSearchErrorAborts(t *testing.T) {
+	db := newDB(t)
+	find := func(cn string) (string, error) {
+		if cn == "a" {
+			return "", errors.New("timeout")
+		}
+		return "CN=B,DC=x", nil
+	}
+	if err := migrateScopeRules(db, []string{"a", "b"}, find); err == nil {
+		t.Fatal("atteso errore su ricerca fallita")
+	}
+	if v, _ := db.GetConfig(ScopeMigratedConfigKey); v == "1" {
+		t.Error("flag scritto nonostante l'errore")
+	}
+	if rs, _ := db.ListScopeRules(); len(rs) != 0 {
+		t.Errorf("regole create nonostante l'errore: %+v", rs)
+	}
+}

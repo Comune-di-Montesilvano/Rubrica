@@ -149,3 +149,29 @@ func TestScopeRulesCRUD(t *testing.T) {
 		t.Errorf("scope dopo delete = %+v", rs)
 	}
 }
+
+// Review: prima l'OU mapping vinceva sempre sul range; la migrazione deve
+// mettere le aree con regole ou prima di quelle con solo range.
+func TestMigrationKeepsOUBeforeRange(t *testing.T) {
+	db := newTestDB(t)
+	now := time.Now()
+	if _, err := db.Exec(`DELETE FROM area_rules`); err != nil {
+		t.Fatal(err)
+	}
+	db.SetConfig("area_rules_migrated", "")
+	if _, err := db.Exec(`INSERT INTO areas (key, name, range_start, range_end, created_at, updated_at) VALUES ('azienda_speciale', 'Azienda Speciale', 500, 599, ?, ?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.migrateAreaRules(); err != nil {
+		t.Fatal(err)
+	}
+	tree, _ := db.AreaTree()
+	interno := arearules.Profile{DN: "CN=x,OU=Users,OU=INTERNI,DC=x", Extensions: []string{"550"}}
+	if area, _ := arearules.Resolve(interno, tree); area != "interni" {
+		t.Errorf("dipendente OU=INTERNI con interno 550 = %q, want interni (OU vince sul range come prima)", area)
+	}
+	pbx := arearules.Profile{Extensions: []string{"550"}}
+	if area, _ := arearules.Resolve(pbx, tree); area != "azienda_speciale" {
+		t.Errorf("peer 550 = %q, want azienda_speciale", area)
+	}
+}

@@ -143,3 +143,27 @@ func TestSetContactAreaRespectsOverride(t *testing.T) {
 		t.Errorf("area = %q, want esterni (manual_override)", area)
 	}
 }
+
+// Review: PRAGMA foreign_keys vale per connessione; la cancellazione non
+// deve dipendere dal cascade.
+func TestDeleteManualContactWithoutForeignKeys(t *testing.T) {
+	db := newTestDB(t)
+	db.SetMaxOpenConns(1)
+	seedSubAreas(t, db)
+	if _, err := db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+		t.Fatal(err)
+	}
+	c := &Contact{UID: "manual-y", DisplayName: "Y", Area: "interni"}
+	if err := db.CreateManualContact(c); err != nil {
+		t.Fatal(err)
+	}
+	db.SetContactSubAreas(c.ID, []string{"dirigenti"})
+	if err := db.DeleteManualContact("manual-y"); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM contact_sub_areas`).Scan(&n)
+	if n != 0 {
+		t.Errorf("righe orfane = %d", n)
+	}
+}
