@@ -1,0 +1,18 @@
+<div class="section-head"><h3>Regole</h3></div>
+{{if .Parent}}<p class="helptext">Sotto-area di <a href="/admin/areas/{{.Parent.ID}}">{{.Parent.Name}}</a>: le regole valgono solo per i contatti di quell'area.</p>{{end}}
+{{template "admin_rules.html" .RulesBlock}}
+
+<div class="section-head" style="margin-top:20px;"><h3>Membri attuali ({{.MembersTotal}})</h3></div>
+<p class="helptext">Aggiornati all'ultimo sync: dopo una modifica alle regole ricaricare la pagina a sync concluso.</p>
+<ul class="member-list">
+    {{range .Members}}<li>{{.DisplayName}}</li>{{else}}<li class="helptext">Nessun membro.</li>{{end}}
+    {{if gt .MembersTotal (len .Members)}}<li class="helptext">… e altri, {{.MembersTotal}} in totale</li>{{end}}
+</ul>
+
+{{if .HasSubAreas}}
+<div class="section-head" style="margin-top:20px;"><h3>Senza sottogruppo ({{.WithoutSubTotal}})</h3></div>
+<p class="helptext">Contatti di quest'area che non rientrano in nessuna sotto-area: aggiungili a un gruppo AD o completa le regole.</p>
+<ul class="member-list">
+    {{range .WithoutSub}}<li>{{.DisplayName}}</li>{{else}}<li class="helptext">Nessuno.</li>{{end}}
+</ul>
+{{end}}

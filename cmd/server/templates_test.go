@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/ldap"
 )
 
 // Il form della rubrica telefoni ha un campo testo seguito da un campo
@@ -74,5 +75,43 @@ func TestAdminAreasTreeRendersSubAreas(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Errorf("manca %q nel frammento", want)
 		}
+	}
+}
+
+func TestAdminRulesBlockRenders(t *testing.T) {
+	tpl := template.Must(template.New("").ParseFiles("../../web/templates/admin_rules.html"))
+	data := rulesBlock{
+		Rules:           []ruleView{{ID: 7, Label: "Gruppo AD rubrica_dirigenti"}},
+		PostURL:         "/admin/areas/2/rules",
+		DeleteURLPrefix: "/admin/areas/2/rules/",
+		Target:          "#area-detail-content",
+		FormID:          "rule-2",
+		AllowRange:      true,
+		Error:           "nome di attributo LDAP non valido",
+	}
+	var buf bytes.Buffer
+	if err := tpl.ExecuteTemplate(&buf, "admin_rules.html", data); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	html := buf.String()
+	for _, want := range []string{"Gruppo AD rubrica_dirigenti", `hx-post="/admin/areas/2/rules/7/delete"`, `value="range"`, "/admin/ad/suggest", "nome di attributo LDAP non valido"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("manca %q", want)
+		}
+	}
+}
+
+func TestAdminSuggestionsRender(t *testing.T) {
+	tpl := template.Must(template.New("").ParseFiles("../../web/templates/admin_ad_suggestions.html"))
+	data := map[string]interface{}{
+		"Target":      "rule-2-value",
+		"Suggestions": []ldap.Suggestion{{Value: `CN=A"B,DC=x`, Label: "A\"B"}},
+	}
+	var buf bytes.Buffer
+	if err := tpl.ExecuteTemplate(&buf, "admin_ad_suggestions.html", data); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(buf.String(), `data-target="rule-2-value"`) || strings.Contains(buf.String(), `A"B,DC`) {
+		t.Errorf("suggerimento non reso o non escapato: %s", buf.String())
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/arearules"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/i18n"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/ldap"
@@ -219,4 +220,165 @@ func handleAdminDeleteArea(w http.ResponseWriter, r *http.Request) {
 // scopeData: dati della sezione Perimetro (completata nel Task 9).
 func scopeData() (map[string]interface{}, error) {
 	return map[string]interface{}{}, nil
+}
+
+type ruleView struct {
+	ID    int64
+	Label string
+}
+
+func ruleViews(rs []*database.AreaRule) []ruleView {
+	out := make([]ruleView, 0, len(rs))
+	for _, r := range rs {
+		out = append(out, ruleView{ID: r.ID, Label: arearules.Label(r.Rule)})
+	}
+	return out
+}
+
+// rulesBlock alimenta admin_rules.html, condiviso da aree e perimetro.
+type rulesBlock struct {
+	Rules           []ruleView
+	PostURL         string
+	DeleteURLPrefix string // + "<id>/delete"
+	Target          string
+	FormID          string
+	AllowRange      bool // false nel perimetro (vale solo per AD)
+	Error           string
+}
+
+func parseRuleForm(r *http.Request) (arearules.Rule, error) {
+	return arearules.Normalize(r.FormValue("kind"), r.FormValue("attr"), r.FormValue("value"))
+}
+
+// areaDetailData: regole, membri e "senza sottogruppo" di un'area.
+func areaDetailData(a *database.Area, ruleErr string) (map[string]interface{}, error) {
+	rules, err := db.ListAreaRules(a.ID)
+	if err != nil {
+		return nil, err
+	}
+	var members []*database.Contact
+	var total int
+	if a.ParentKey == "" {
+		members, total, err = db.ListAreaMembers(a.Key, 30)
+	} else {
+		members, total, err = db.ListSubAreaMembers(a.Key, 30)
+	}
+	if err != nil {
+		return nil, err
+	}
+	data := map[string]interface{}{
+		"Area":         a,
+		"Members":      members,
+		"MembersTotal": total,
+		"RulesBlock": rulesBlock{
+			Rules:           ruleViews(rules),
+			PostURL:         fmt.Sprintf("/admin/areas/%d/rules", a.ID),
+			DeleteURLPrefix: fmt.Sprintf("/admin/areas/%d/rules/", a.ID),
+			Target:          "#area-detail-content",
+			FormID:          fmt.Sprintf("rule-%d", a.ID),
+			AllowRange:      true,
+			Error:           ruleErr,
+		},
+	}
+	if a.ParentKey == "" {
+		areas, err := db.ListAreas()
+		if err != nil {
+			return nil, err
+		}
+		hasSub := false
+		for _, x := range areas {
+			hasSub = hasSub || x.ParentKey == a.Key
+		}
+		if hasSub {
+			without, n, err := db.ListAreaMembersWithoutSubArea(a.Key, 30)
+			if err != nil {
+				return nil, err
+			}
+			data["WithoutSub"], data["WithoutSubTotal"], data["HasSubAreas"] = without, n, true
+		}
+	} else if parent, err := db.GetAreaByKey(a.ParentKey); err == nil && parent != nil {
+		data["Parent"] = parent
+	}
+	return data, nil
+}
+
+func renderAreaDetail(w http.ResponseWriter, r *http.Request, a *database.Area, ruleErr string) {
+	data, err := areaDetailData(a, ruleErr)
+	if err != nil {
+		http.Error(w, "Failed to load area", http.StatusInternalServerError)
+		return
+	}
+	data["Messages"] = i18n.GetMessages(i18n.ResolveLocale(r))
+	templates.ExecuteTemplate(w, "admin_area_detail.html", data)
+}
+
+func handleAdminAreaDetail(w http.ResponseWriter, r *http.Request) {
+	a, err := db.GetArea(areaIDFrom(r))
+	if err != nil || a == nil {
+		http.NotFound(w, r)
+		return
+	}
+	detail, err := areaDetailData(a, "")
+	if err != nil {
+		http.Error(w, "Failed to load area", http.StatusInternalServerError)
+		return
+	}
+	data := railData()
+	for k, v := range detail {
+		data[k] = v
+	}
+	data["Username"] = sessionAdminUsername(r)
+	data["Section"] = "admin-areas"
+	data["Messages"] = i18n.GetMessages(i18n.ResolveLocale(r))
+	templates.ExecuteTemplate(w, "admin_page_area_detail.html", data)
+}
+
+func handleAdminAddAreaRule(w http.ResponseWriter, r *http.Request) {
+	a, err := db.GetArea(areaIDFrom(r))
+	if err != nil || a == nil {
+		http.NotFound(w, r)
+		return
+	}
+	rule, err := parseRuleForm(r)
+	if err != nil {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		renderAreaDetail(w, r, a, err.Error())
+		return
+	}
+	if err := db.AddAreaRule(a.ID, rule); err != nil {
+		log.Printf("[ADMIN] Failed to add rule: %v", err)
+	}
+	rulesChanged()
+	renderAreaDetail(w, r, a, "")
+}
+
+func handleAdminDeleteAreaRule(w http.ResponseWriter, r *http.Request) {
+	a, err := db.GetArea(areaIDFrom(r))
+	if err != nil || a == nil {
+		http.NotFound(w, r)
+		return
+	}
+	rid, _ := strconv.ParseInt(mux.Vars(r)["rid"], 10, 64)
+	if err := db.DeleteAreaRule(a.ID, rid); err != nil {
+		log.Printf("[ADMIN] Failed to delete rule: %v", err)
+	}
+	rulesChanged()
+	renderAreaDetail(w, r, a, "")
+}
+
+// handleAdminADSuggest: suggerimenti dal vivo per il campo target.
+func handleAdminADSuggest(w http.ResponseWriter, r *http.Request) {
+	data := map[string]interface{}{"Target": r.URL.Query().Get("target")}
+	sugg, err := ldap.Suggest(cfg, r.URL.Query().Get("kind"), r.URL.Query().Get("attr"), r.URL.Query().Get("q"))
+	switch {
+	case errors.Is(err, ldap.ErrInvalidAttr):
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		data["Error"] = "Nome di attributo LDAP non valido"
+	case err != nil:
+		log.Printf("[ADMIN] Suggerimenti AD: %v", err)
+		data["Error"] = "AD non disponibile"
+	default:
+		data["Suggestions"] = sugg
+	}
+	templates.ExecuteTemplate(w, "admin_ad_suggestions.html", data)
 }
