@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/arearules"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
 )
 
@@ -426,13 +427,12 @@ func ApplyPeers(db *database.DB, peers []Peer, syncTime time.Time) (int, error) 
 		inDomain[e] = struct{}{}
 	}
 
-	// Regole area-per-range (vedi Area.RangeStart/RangeEnd): un peer non
-	// altrimenti mappato il cui interno cade in un range assegnato prende
-	// quella come Area — e la usa anche come Department, altrimenti
-	// resterebbe con solo il generico "Centralino - non mappato".
-	areas, err := db.ListAreas()
+	// Regole di area (vedi internal/arearules): per un peer valgono solo le
+	// regole range, il profilo non ha dati AD. L'area trovata fa anche da
+	// reparto, altrimenti resterebbe "Centralino - non mappato".
+	tree, err := db.AreaTree()
 	if err != nil {
-		log.Printf("[PBX] Failed to list areas for range matching: %v", err)
+		log.Printf("[PBX] Failed to load area rules: %v", err)
 	}
 
 	// Fallback sulle categorie chiamate (vedi /admin/group-categories) per
@@ -460,9 +460,13 @@ func ApplyPeers(db *database.DB, peers []Peer, syncTime time.Time) (int, error) 
 			continue
 		}
 		area, department := "", "Centralino - non mappato"
-		if a := database.MatchExtensionRange(p.Extension, areas); a != nil {
-			area = a.Key
-			department = a.Name
+		prof := arearules.Profile{Extensions: []string{p.Extension}}
+		resolved, subs := arearules.Resolve(prof, tree)
+		if resolved != "" {
+			area = resolved
+			if n := arearules.FindNode(tree, resolved); n != nil {
+				department = n.Name
+			}
 		} else if c := database.MatchGroupCategory(p.Extension, categories); c != nil {
 			department = c.Name
 		}
@@ -478,6 +482,14 @@ func ApplyPeers(db *database.DB, peers []Peer, syncTime time.Time) (int, error) 
 		if err := db.UpsertPBXContact(c); err != nil {
 			log.Printf("[PBX] skip peer %s: %v", p.Extension, err)
 			continue
+		}
+		if id, stored, err := db.ContactIDAndArea(c.UID); err == nil && id != 0 {
+			if stored != area {
+				subs = arearules.SubAreasFor(prof, tree, stored)
+			}
+			if err := db.SetContactSubAreas(id, subs); err != nil {
+				log.Printf("[PBX] sotto-aree di %s non salvate: %v", c.UID, err)
+			}
 		}
 		applied++
 	}
@@ -496,13 +508,11 @@ func ApplyPeers(db *database.DB, peers []Peer, syncTime time.Time) (int, error) 
 func ApplyCallGroups(db *database.DB, groups []CallGroup) error {
 	seen := make(map[string]struct{}, len(groups))
 
-	// Regole area-per-range (vedi Area.RangeStart/RangeEnd): un gruppo del
-	// centralino il cui interno cade in un range assegnato prende quella
-	// come Area — vedi anche ApplyPeers per lo stesso meccanismo sui
-	// contatti.
-	areas, err := db.ListAreas()
+	// Regole di area range (vedi internal/arearules): un gruppo del
+	// centralino il cui interno cade in un range prende quell'area.
+	tree, err := db.AreaTree()
 	if err != nil {
-		log.Printf("[PBX] Failed to list areas for range matching: %v", err)
+		log.Printf("[PBX] Failed to load area rules: %v", err)
 	}
 
 	for _, g := range groups {
@@ -525,10 +535,7 @@ func ApplyCallGroups(db *database.DB, groups []CallGroup) error {
 			}
 		}
 
-		area := ""
-		if a := database.MatchExtensionRange(g.Extension, areas); a != nil {
-			area = a.Key
-		}
+		area, _ := arearules.Resolve(arearules.Profile{Extensions: []string{g.Extension}}, tree)
 
 		row, err := db.UpsertPBXGroup(g.Extension, name, "", nameOverride, area)
 		if err != nil {
@@ -562,6 +569,49 @@ func ApplyCallGroups(db *database.DB, groups []CallGroup) error {
 			continue
 		}
 		if err := db.DeleteGroup(g.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ReapplyAreas riapplica le regole di area ai contatti e ai gruppi del
+// centralino già nel DB, senza interrogare il ViVo: serve subito dopo una
+// modifica alle regole in admin. Il reparto si riallinea al sync PBX
+// successivo.
+func ReapplyAreas(db *database.DB) error {
+	tree, err := db.AreaTree()
+	if err != nil {
+		return err
+	}
+	contacts, err := db.ListPBXContacts()
+	if err != nil {
+		return err
+	}
+	for _, c := range contacts {
+		prof := arearules.Profile{Extensions: []string{c.LDAPExt}}
+		area, subs := arearules.Resolve(prof, tree)
+		if err := db.SetContactArea(c.ID, area); err != nil {
+			return err
+		}
+		_, stored, err := db.ContactIDAndArea(c.UID)
+		if err != nil {
+			return err
+		}
+		if stored != area {
+			subs = arearules.SubAreasFor(prof, tree, stored)
+		}
+		if err := db.SetContactSubAreas(c.ID, subs); err != nil {
+			return err
+		}
+	}
+	groups, err := db.ListGroupsBySource("pbx")
+	if err != nil {
+		return err
+	}
+	for _, g := range groups {
+		area, _ := arearules.Resolve(arearules.Profile{Extensions: []string{g.Number}}, tree)
+		if err := db.SetGroupArea(g.ID, area); err != nil {
 			return err
 		}
 	}
