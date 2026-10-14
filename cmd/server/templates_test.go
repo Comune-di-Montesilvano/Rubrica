@@ -175,3 +175,22 @@ func TestSearchResultsShowsSubAreaTags(t *testing.T) {
 		t.Errorf("tag mancanti: %s", buf.String())
 	}
 }
+
+func TestAdminContactsShowsSubAreaCheckboxes(t *testing.T) {
+	tpl := template.Must(template.New("").ParseFiles("../../web/templates/admin_contacts.html"))
+	c := &database.Contact{ID: 5, UID: "manual-x", DisplayName: "X", Area: "interni"}
+	data := map[string]interface{}{
+		"Messages":        map[string]string{"save": "Salva", "delete": "Elimina"},
+		"Contacts":        []*database.Contact{c},
+		"Areas":           []*database.Area{{Key: "interni", Name: "Personale comunale"}},
+		"AreaNodes":       []*database.AreaNode{{Area: &database.Area{Key: "interni", Name: "Personale comunale"}, Children: []*database.Area{{Key: "dirigenti", Name: "Dirigenti", ParentKey: "interni"}}}},
+		"ContactSubAreas": map[int64]map[string]bool{5: {"dirigenti": true}},
+	}
+	var buf bytes.Buffer
+	if err := tpl.ExecuteTemplate(&buf, "admin_contacts.html", data); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !regexp.MustCompile(`name="sub_areas" value="dirigenti"[^>]*checked`).MatchString(buf.String()) {
+		t.Errorf("checkbox dirigenti non spuntata: %s", buf.String())
+	}
+}

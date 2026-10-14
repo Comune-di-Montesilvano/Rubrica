@@ -471,3 +471,74 @@ func filterBySubArea(results []*phonebook.ContactWithGroups, sub string) []*phon
 	}
 	return out
 }
+
+// manualSubAreas: sotto-aree spuntate nel form di un contatto manuale,
+// ristrette a quelle dell'area scelta.
+func manualSubAreas(r *http.Request, area string, nodes []*database.AreaNode) []string {
+	valid := map[string]bool{}
+	for _, n := range nodes {
+		if n.Key != area {
+			continue
+		}
+		for _, c := range n.Children {
+			valid[c.Key] = true
+		}
+	}
+	r.ParseForm()
+	var out []string
+	for _, k := range r.Form["sub_areas"] {
+		if valid[k] {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// manualContactsData: aree di primo livello, albero e sotto-aree attuali
+// per la pagina "Contatti locali".
+func manualContactsData(contacts []*database.Contact) map[string]interface{} {
+	areas, err := db.ListAreas()
+	if err != nil {
+		log.Printf("[ADMIN] Failed to list areas: %v", err)
+	}
+	var top []*database.Area
+	for _, a := range areas {
+		if a.ParentKey == "" {
+			top = append(top, a)
+		}
+	}
+	ids := make([]int64, 0, len(contacts))
+	for _, c := range contacts {
+		ids = append(ids, c.ID)
+	}
+	selected := map[int64]map[string]bool{}
+	if byID, err := db.ListSubAreasForContacts(ids); err == nil {
+		for id, keys := range byID {
+			selected[id] = map[string]bool{}
+			for _, k := range keys {
+				selected[id][k] = true
+			}
+		}
+	}
+	return map[string]interface{}{
+		"Areas":           top,
+		"AreaNodes":       database.BuildAreaNodes(areas),
+		"ContactSubAreas": selected,
+	}
+}
+
+// saveManualSubAreas salva le sotto-aree di un contatto manuale appena
+// creato o modificato.
+func saveManualSubAreas(r *http.Request, uid, area string) {
+	areas, err := db.ListAreas()
+	if err != nil {
+		return
+	}
+	id, _, err := db.ContactIDAndArea(uid)
+	if err != nil || id == 0 {
+		return
+	}
+	if err := db.SetContactSubAreas(id, manualSubAreas(r, area, database.BuildAreaNodes(areas))); err != nil {
+		log.Printf("[ADMIN] Sotto-aree di %s non salvate: %v", uid, err)
+	}
+}

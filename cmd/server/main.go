@@ -1225,17 +1225,11 @@ func renderAdminContacts(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to list contacts", http.StatusInternalServerError)
 		return
 	}
-	areas, err := db.ListAreas()
-	if err != nil {
-		log.Printf("[ADMIN] Failed to list areas: %v", err)
-	}
 
 	locale := i18n.ResolveLocale(r)
-	data := map[string]interface{}{
-		"Contacts": contacts,
-		"Areas":    areas,
-		"Messages": i18n.GetMessages(locale),
-	}
+	data := manualContactsData(contacts)
+	data["Contacts"] = contacts
+	data["Messages"] = i18n.GetMessages(locale)
 	templates.ExecuteTemplate(w, "admin_contacts.html", data)
 }
 
@@ -1248,15 +1242,13 @@ func handleAdminContacts(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to list contacts", http.StatusInternalServerError)
 		return
 	}
-	areas, err := db.ListAreas()
-	if err != nil {
-		log.Printf("[ADMIN] Failed to list areas: %v", err)
-	}
 
 	locale := i18n.ResolveLocale(r)
 	data := railData()
+	for k, v := range manualContactsData(contacts) {
+		data[k] = v
+	}
 	data["Contacts"] = contacts
-	data["Areas"] = areas
 	data["Username"] = sessionAdminUsername(r)
 	data["Section"] = "admin-contacts"
 	data["Messages"] = i18n.GetMessages(locale)
@@ -1282,6 +1274,8 @@ func handleAdminCreateContact(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := db.CreateManualContact(c); err != nil {
 		log.Printf("[ADMIN] Failed to create manual contact %q: %v", name, err)
+	} else {
+		saveManualSubAreas(r, c.UID, c.Area)
 	}
 	renderAdminContacts(w, r)
 }
@@ -1306,6 +1300,8 @@ func handleAdminUpdateContact(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := db.UpdateManualContact(c); err != nil {
 		log.Printf("[ADMIN] Failed to update manual contact %q: %v", uid, err)
+	} else {
+		saveManualSubAreas(r, uid, c.Area)
 	}
 	renderAdminContacts(w, r)
 }

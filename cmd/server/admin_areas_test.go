@@ -43,3 +43,17 @@ func TestFilterBySubArea(t *testing.T) {
 		t.Errorf("senza filtro = %d", len(got))
 	}
 }
+
+func TestManualSubAreasKeepsOnlyChosenArea(t *testing.T) {
+	nodes := []*database.AreaNode{
+		{Area: &database.Area{Key: "interni"}, Children: []*database.Area{{Key: "dirigenti", ParentKey: "interni"}}},
+		{Area: &database.Area{Key: "esterni"}, Children: []*database.Area{{Key: "fornitori", ParentKey: "esterni"}}},
+	}
+	form := url.Values{"sub_areas": {"dirigenti", "fornitori", "fantasma"}}
+	r := httptest.NewRequest("POST", "/", strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	got := manualSubAreas(r, "interni", nodes)
+	if len(got) != 1 || got[0] != "dirigenti" {
+		t.Errorf("manualSubAreas = %v, want [dirigenti]", got)
+	}
+}
