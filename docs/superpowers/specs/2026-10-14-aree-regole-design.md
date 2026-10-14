@@ -152,7 +152,9 @@ func Resolve(p Profile, tree []Node) (area string, subAreas []string)
    attuale: AD svuota spesso il `memberOf` di chi viene disabilitato);
 5. per ogni utente ammesso chiama `Resolve` → `contacts.area` e righe di
    `contact_sub_areas` (sostituite in blocco per quel contatto: delete +
-   insert nella stessa transazione dell'upsert). Nessuna area → `""`
+   insert in una transazione, subito dopo l'upsert). Se il contatto ha
+   `manual_override` e quindi conserva l'area precedente, le sotto-aree
+   sono calcolate per l'area effettivamente salvata. Nessuna area → `""`
    (comportamento attuale), nessuna sotto-area → nessuna riga.
    Department vuoto → nome dell'area (oggi solo per i match da range; ora
    per qualsiasi regola — cambio voluto: nessun contatto senza etichetta);
@@ -197,8 +199,13 @@ risolti in DN), quindi avviene **al primo sync** dopo il deploy, se
 `LDAP_ALLOWED_GROUPS` viene cercato in AD (`(&(objectClass=group)(cn=<CN>))`)
 e il DN trovato diventa una regola `adgroup`; un CN inesistente viene
 scartato con log (es. `all_users-servizi_esterni`, che non esiste). Poi
-`scope_rules_migrated=1`. Da quel momento la variabile è ignorata e va tolta
-da `.env.example`, `docker-compose.yml` e `config.go`.
+`scope_rules_migrated=1`. Da quel momento la variabile è ignorata: resta in
+`config.go` solo come seed una tantum (stesso schema di
+`PRIMARY_NUMBER_PREFIX_TEMPLATE`), documentata così in `.env.example` e
+`docker-compose.yml`, e va tolta dallo stack Portainer dopo la verifica.
+Se `LDAP_ALLOWED_GROUPS` è valorizzata ma **nessun** CN viene trovato, il
+sync si interrompe con errore e il flag non viene scritto: senza regole
+entrerebbero tutti gli utenti AD.
 
 Differenza: oggi conta solo la membership diretta, `adgroup` include gli
 annidati. Verificato il 2026-10-14 su `ALL_USERS-SERVIZI_INTERNI`: 248
@@ -229,11 +236,12 @@ visualizzazione (rail e tag), non la precedenza.
   RUBRICA_DIRIGENTI", "description = Dirigente", "Interni 700–799",
   "Utente mario.rossi", "Escludi stagista1", "Richiede mail compilato") e
   pulsante "Togli";
-- aggiunta regola: tipo → campi; suggerimenti HTMX dal vivo su AD:
-  `/admin/ad/ou?q=`, `/admin/ad/gruppi?q=`, `/admin/ad/attributi?q=`
-  (statistiche alla `attrstats` di CruscottoPA: nome, quanti utenti, 3
-  valori più frequenti), `/admin/ad/valori?attr=&q=`, `/admin/ad/utenti?q=`;
-  risposta = lista di opzioni cliccabili;
+- aggiunta regola: tipo → campi; suggerimenti HTMX dal vivo su AD da un
+  unico endpoint `/admin/ad/suggest?kind=&attr=&q=&target=` che in base al
+  tipo cerca OU, gruppi, utenti, valori di un attributo, oppure (`kind=attrname`)
+  nomi di attributo con statistiche alla `attrstats` di CruscottoPA (nome,
+  quanti utenti, 3 valori più frequenti); risposta = lista di opzioni
+  cliccabili che compilano il campo `target`;
 - membri attuali (max 30 nomi + totale) da `contacts`;
 - se l'area ha sotto-aree: contatti dell'area "senza sottogruppo".
 
@@ -246,8 +254,11 @@ in rubrica. Nessuna regola = tutti gli utenti AD".
 - **Anteprima** prima di applicare: esegue ricerca AD + valutazione senza
   scrivere nulla e mostra "Con queste regole entrano N utenti attivi (oggi
   M in rubrica)", più fino a 30 nomi di chi entrerebbe e di chi uscirebbe.
-- Le modifiche al perimetro avviano il sync come le altre regole, soggetto
-  alla protezione svuotamento (sezione 3).
+- Le modifiche al perimetro **non** avviano il sync da sole (a differenza
+  delle regole di area): dopo ogni modifica la pagina ricalcola l'anteprima
+  e mostra il pulsante "Applica ora" (avvia il sync). Altrimenti si
+  applicano al sync orario successivo. In entrambi i casi vale la
+  protezione svuotamento (sezione 3).
 
 ## 5. Rubrica pubblica
 
