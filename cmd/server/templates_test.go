@@ -254,3 +254,27 @@ func TestRailSubAreasCollapsibleUnderParent(t *testing.T) {
 		t.Error("nelle pagine admin la rail mostra solo le aree")
 	}
 }
+
+// "Copia email" di reparto solo se il reparto ha almeno un'email.
+func TestDeptCopyOnlyWithEmails(t *testing.T) {
+	funcs := template.FuncMap{
+		"initials": func(string) string { return "XX" }, "sentenceCase": func(s string) string { return s },
+		"extList": func(s string) string { return s },
+	}
+	tpl := template.Must(template.New("").Funcs(funcs).ParseFiles(
+		"../../web/templates/search_results.html", "../../web/templates/group_category_node.html", "../../web/templates/group_row.html"))
+	data := map[string]interface{}{
+		"Groups": []*phonebook.DepartmentGroup{
+			{Name: "Esterni", Contacts: []*phonebook.ContactWithGroups{{Contact: &database.Contact{UID: "p", DisplayName: "Paola"}}}},
+			{Name: "Ragioneria", Contacts: []*phonebook.ContactWithGroups{{Contact: &database.Contact{UID: "r", DisplayName: "Rita", Email: "r@x.it"}}}},
+		},
+		"Messages": map[string]string{"no_results": "Nessun risultato"},
+	}
+	var buf bytes.Buffer
+	if err := tpl.ExecuteTemplate(&buf, "search_results.html", data); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if n := strings.Count(buf.String(), `class="dept-copy"`); n != 1 {
+		t.Errorf("pulsanti Copia email = %d, want 1 (solo Ragioneria)", n)
+	}
+}

@@ -36,16 +36,27 @@
 </div>
 
 <div class="results-contacts">
+{{range .CallGroupSections}}
+<details class="dept" open>
+    <summary class="dept-head">
+        <span class="dept-name">{{.Name}}</span>
+        <span class="dept-count">{{len .Groups}}</span>
+    </summary>
+    {{range .Groups}}{{template "group_row.html" .}}{{end}}
+</details>
+{{end}}
 {{if .Groups}}
 {{range .Groups}}
 <details class="dept" open>
     <summary class="dept-head">
         <span class="dept-name">{{sentenceCase .Name}}</span>
         <span class="dept-count">{{len .Contacts}}</span>
+        {{if .HasEmail}}
         <button type="button" class="dept-copy" title="Copia le email del reparto" onclick="copyEmails(event, this.closest('details.dept'), this)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6l8 6 8-6M4 6h16v12H4V6z"/></svg>
             <span class="dept-copy-label">Copia email</span>
         </button>
+        {{end}}
     </summary>
     {{range .Contacts}}
     <div class="row"{{if .Contact.Email}} data-email="{{.Contact.Email}}"{{end}}>
@@ -93,7 +104,7 @@
 </details>
 {{end}}
 {{else}}
-{{if not .CallGroups}}
+{{if and (not .CallGroups) (not .CallGroupSections)}}
 <div class="empty-state">
     <div class="empty-state-icon">&#128269;</div>
     <div class="empty-state-text">{{index .Messages "no_results"}}</div>

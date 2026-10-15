@@ -18,8 +18,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/gorilla/mux"
-	"github.com/gorilla/sessions"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/backup"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/carddav"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/config"
@@ -29,6 +27,8 @@ import (
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/ldapserver"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/pbx"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/phonebook"
+	"github.com/gorilla/mux"
+	"github.com/gorilla/sessions"
 )
 
 var (
@@ -453,6 +453,18 @@ func railData() map[string]interface{} {
 	for _, n := range counts {
 		total += n
 	}
+	// Uffici mostra le chiamate di gruppo visibili (almeno un membro
+	// attivo, come in rubrica), non i contatti con area uffici: aggiunte
+	// dopo il Total, che resta il numero dei contatti.
+	if pbService != nil {
+		if groups, err := pbService.ListGroupsWithMembers(); err == nil {
+			for _, g := range groups {
+				if len(g.ActiveMembers()) > 0 {
+					counts["uffici"]++
+				}
+			}
+		}
+	}
 
 	areas, err := db.ListAreas()
 	if err != nil {
@@ -470,7 +482,7 @@ func railData() map[string]interface{} {
 		"AreaNodes":     database.BuildAreaNodes(areas),
 		"Total":         total,
 		"Areas":         areas,
-		"AppVersion": AppVersion,
+		"AppVersion":    AppVersion,
 	}
 }
 
@@ -556,8 +568,12 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 	// migrate() in internal/database) oltre che nell'elenco non filtrato.
 	// Un filtro testuale le riguarda comunque: cerca anche per
 	// numero/nome del gruppo.
+	// Le chiamate di gruppo compaiono ovunque: ad albero nella colonna di
+	// destra (Tutti e ogni area/sotto-area), oppure in sezioni lineari
+	// nella colonna principale quando si apre l'area "uffici".
+	ufficiView := groupFilter == "uffici" && subFilter == ""
 	var callGroups []*phonebook.GroupWithMembers
-	if subFilter == "" && (groupFilter == "" || groupFilter == "uffici") {
+	{
 		allGroups, err := pbService.ListGroupsWithMembers()
 		if err != nil {
 			log.Printf("[SEARCH] Failed to list call groups: %v", err)
@@ -612,6 +628,12 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var callGroupSections []*phonebook.GroupSection
+	if ufficiView {
+		callGroupSections = phonebook.FlattenGroupCategoryTree(callGroupTree, uncategorizedGroups)
+		callGroups, callGroupTree, uncategorizedGroups, groupMatches = nil, nil, nil, nil
+	}
+
 	locale := i18n.ResolveLocale(r)
 	data := map[string]interface{}{
 		"Groups":              phonebook.GroupByDepartment(results),
@@ -619,6 +641,7 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		"CallGroupTree":       callGroupTree,
 		"UncategorizedGroups": uncategorizedGroups,
 		"GroupMatches":        groupMatches,
+		"CallGroupSections":   callGroupSections,
 		"Messages":            i18n.GetMessages(locale),
 	}
 

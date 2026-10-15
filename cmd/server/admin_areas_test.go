@@ -192,3 +192,62 @@ func TestRunLDAPSyncIsSerialized(t *testing.T) {
 		t.Errorf("runLDAPSync concorrenti = %d, want 1", maxRunning)
 	}
 }
+
+// Uffici: chiamate di gruppo in sezioni lineari nella colonna principale;
+// nelle altre aree la colonna ad albero resta a destra.
+func TestSearchUfficiLinearAndRightColumnElsewhere(t *testing.T) {
+	setupHandlerEnv(t)
+	pbService = phonebook.NewService(db)
+	i := func(n int) *int { return &n }
+	db.CreateGroupCategory(&database.GroupCategory{Key: "uffici", Name: "Uffici", RangeStart: i(400), RangeEnd: i(499)})
+	parent, _ := db.ListGroupCategories()
+	pid := parent[0].ID
+	db.CreateGroupCategory(&database.GroupCategory{Key: "fin", Name: "Settore III - Finanziario", ParentID: &pid, RangeStart: i(470), RangeEnd: i(479)})
+	c := &database.Contact{UID: "m", DisplayName: "Membro", Email: "m@x.it", Area: "interni", LastSync: time.Now()}
+	db.UpsertContact(c)
+	cid, _, _ := db.ContactIDAndArea("m")
+	g := &database.GroupNumber{Number: "471", Name: "Ragioneria"}
+	if err := db.CreateGroup(g); err != nil {
+		t.Fatal(err)
+	}
+	db.AddGroupMember(g.ID, cid)
+
+	get := func(q string) string {
+		rec := httptest.NewRecorder()
+		handleSearch(rec, httptest.NewRequest("GET", "/search"+q, nil))
+		return rec.Body.String()
+	}
+	uff := get("?group=uffici")
+	if !strings.Contains(uff, "Uffici › Settore III - Finanziario") || !strings.Contains(uff, "Ragioneria") {
+		t.Errorf("sezione Uffici senza vista lineare per categoria")
+	}
+	if strings.Contains(uff, `class="results-groups"`) {
+		t.Error("in Uffici la colonna ad albero a destra non deve comparire")
+	}
+	for _, q := range []string{"", "?group=interni", "?group=interni&sub=dirigenti"} {
+		if !strings.Contains(get(q), `class="results-groups"`) {
+			t.Errorf("%q: manca la colonna Chiamate di gruppo a destra", q)
+		}
+	}
+}
+
+// Il contatore di "Uffici" nel menù conta le chiamate di gruppo visibili
+// (con almeno un membro attivo), non i soli contatti con area uffici.
+func TestRailUfficiCountsCallGroups(t *testing.T) {
+	setupHandlerEnv(t)
+	pbService = phonebook.NewService(db)
+	db.UpsertContact(&database.Contact{UID: "m", DisplayName: "M", Email: "m@x.it", LastSync: time.Now()})
+	cid, _, _ := db.ContactIDAndArea("m")
+	full := &database.GroupNumber{Number: "471", Name: "Pieno"}
+	empty := &database.GroupNumber{Number: "472", Name: "Vuoto"}
+	db.CreateGroup(full)
+	db.CreateGroup(empty)
+	db.AddGroupMember(full.ID, cid)
+	counts := railData()["AreaCounts"].(map[string]int)
+	if counts["uffici"] != 1 {
+		t.Errorf("uffici = %d, want 1 (solo il gruppo con membri attivi)", counts["uffici"])
+	}
+	if total := railData()["Total"].(int); total != 1 {
+		t.Errorf("Total = %d, want 1 (i gruppi non si sommano ai contatti)", total)
+	}
+}

@@ -194,6 +194,17 @@ type DepartmentGroup struct {
 	Contacts []*ContactWithGroups
 }
 
+// HasEmail: almeno un contatto del reparto ha un'email (il pulsante
+// "Copia email" compare solo in quel caso).
+func (d *DepartmentGroup) HasEmail() bool {
+	for _, c := range d.Contacts {
+		if strings.TrimSpace(c.Contact.Email) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // GroupByDepartment raggruppa i contatti per Department (etichetta così
 // com'è, non normalizzata qui — la sentence-case è responsabilità del
 // template). Il confronto è case-insensitive: contatti LDAP hanno spesso
@@ -328,4 +339,39 @@ func GroupByDepartment(contacts []*ContactWithGroups) []*DepartmentGroup {
 	})
 
 	return groups
+}
+
+// GroupSection è una sezione della vista lineare delle chiamate di gruppo
+// (area Uffici): una per categoria più specifica, nome con la madre
+// ("Uffici › Settore III - Finanziario").
+type GroupSection struct {
+	Name   string
+	Groups []*GroupWithMembers
+}
+
+// FlattenGroupCategoryTree stende l'albero di BuildGroupCategoryTree in
+// sezioni, nello stesso ordine (range crescente, genitore prima dei figli);
+// i gruppi senza categoria finiscono in fondo in "Altre chiamate".
+func FlattenGroupCategoryTree(tree []*GroupCategoryNode, uncategorized []*GroupWithMembers) []*GroupSection {
+	var out []*GroupSection
+	var walk func(nodes []*GroupCategoryNode, prefix string)
+	walk = func(nodes []*GroupCategoryNode, prefix string) {
+		for _, n := range nodes {
+			name := n.Category.Name
+			if prefix != "" {
+				name = prefix + " › " + name
+			}
+			if len(n.Groups) > 0 {
+				out = append(out, &GroupSection{Name: name, Groups: n.Groups})
+			}
+			walk(n.Children, name)
+		}
+	}
+	walk(tree, "")
+	if len(uncategorized) > 0 {
+		rest := append([]*GroupWithMembers{}, uncategorized...)
+		sort.SliceStable(rest, func(i, j int) bool { return rest[i].Group.Number < rest[j].Group.Number })
+		out = append(out, &GroupSection{Name: "Altre chiamate", Groups: rest})
+	}
+	return out
 }

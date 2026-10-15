@@ -2,6 +2,7 @@ package phonebook
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,5 +160,41 @@ func TestAttachSubAreas(t *testing.T) {
 	}
 	if len(results[0].SubAreas) != 1 || results[0].SubAreas[0] != (SubAreaTag{Key: "dirigenti", Name: "Dirigenti"}) {
 		t.Errorf("SubAreas = %+v", results[0].SubAreas)
+	}
+}
+
+func TestFlattenGroupCategoryTree(t *testing.T) {
+	i := func(n int) *int { return &n }
+	uffici := &database.GroupCategory{ID: 1, Name: "Uffici", RangeStart: i(400), RangeEnd: i(499)}
+	pid := int64(1)
+	fin := &database.GroupCategory{ID: 2, Name: "Settore III - Finanziario", ParentID: &pid, RangeStart: i(470), RangeEnd: i(479)}
+	luoghi := &database.GroupCategory{ID: 3, Name: "Luoghi", RangeStart: i(651), RangeEnd: i(660)}
+	g := func(n string) *GroupWithMembers {
+		return &GroupWithMembers{Group: &database.GroupNumber{Number: n, Name: "G" + n}}
+	}
+	tree, unc := BuildGroupCategoryTree([]*GroupWithMembers{g("655"), g("472"), g("401"), g("999"), g("471")}, []*database.GroupCategory{uffici, fin, luoghi})
+	sections := FlattenGroupCategoryTree(tree, unc)
+	var got []string
+	for _, s := range sections {
+		var nums []string
+		for _, x := range s.Groups {
+			nums = append(nums, x.Group.Number)
+		}
+		got = append(got, s.Name+":"+strings.Join(nums, ","))
+	}
+	want := []string{"Uffici:401", "Uffici › Settore III - Finanziario:471,472", "Luoghi:655", "Altre chiamate:999"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("sezioni = %v, want %v", got, want)
+	}
+}
+
+func TestDepartmentGroupHasEmail(t *testing.T) {
+	without := &DepartmentGroup{Contacts: []*ContactWithGroups{{Contact: &database.Contact{UID: "a"}}, {Contact: &database.Contact{UID: "b", Email: "  "}}}}
+	with := &DepartmentGroup{Contacts: []*ContactWithGroups{{Contact: &database.Contact{UID: "a"}}, {Contact: &database.Contact{UID: "c", Email: "c@x.it"}}}}
+	if without.HasEmail() {
+		t.Error("reparto senza email: HasEmail deve essere false")
+	}
+	if !with.HasEmail() {
+		t.Error("reparto con una email: HasEmail deve essere true")
 	}
 }

@@ -461,3 +461,4 @@ td.num { font-family: 'IBM Plex Mono'; font-variant-numeric: tabular-nums; font-
 .rail-subs .rail-item.rail-sub .n { font-size: 12px; }
 @media (max-width: 768px) { .rail-subs { display: contents; } .rail-subs[hidden] { display: none; } }
 .toolbar-copy { margin-left: 0; font-size: 14px; padding: 4px 12px; }
+.group-row-details .name { display: flex; align-items: center; gap: 6px; }
