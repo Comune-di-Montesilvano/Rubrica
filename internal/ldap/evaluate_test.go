@@ -111,3 +111,25 @@ func TestSearchAttributesAddsRuleAttrs(t *testing.T) {
 		t.Errorf("attributi = %v (mail già presente non va duplicato)", got)
 	}
 }
+
+func TestEvaluateEntriesNotADGroup(t *testing.T) {
+	rossiDN := "CN=Mario Rossi,OU=Users,OU=INTERNI,DC=x"
+	tree := []arearules.Node{{Key: "interni", Rules: []arearules.Rule{{Kind: "ou", Value: "INTERNI"}}, Children: []arearules.Node{
+		{Key: "dipendenti", Rules: []arearules.Rule{{Kind: "ou", Value: "INTERNI"}, {Kind: "notadgroup", Value: testGroupDN}}},
+	}}}
+	in := syncInput{
+		Entries: []*ldap.Entry{
+			entry(rossiDN, map[string][]string{"sAMAccountName": {"rossi"}}),
+			entry("CN=Bianchi,OU=Users,OU=INTERNI,DC=x", map[string][]string{"sAMAccountName": {"bianchi"}}),
+		},
+		GroupMembers: map[string]map[string]bool{testGroupDN: {arearules.CanonicalDNLoose(rossiDN): true}},
+		Tree:         tree,
+	}
+	if got := arearules.GroupDNs(tree, nil); len(got) != 1 {
+		t.Fatalf("il sync deve risolvere i membri dei gruppi notadgroup: %v", got)
+	}
+	out, _ := evaluateEntries(in, time.Now())
+	if out[0].SubAreas != nil || !reflect.DeepEqual(out[1].SubAreas, []string{"dipendenti"}) {
+		t.Errorf("rossi=%v bianchi=%v, want rossi escluso (dirigente), bianchi dipendente", out[0].SubAreas, out[1].SubAreas)
+	}
+}

@@ -91,6 +91,8 @@ CREATE TABLE IF NOT EXISTS scope_rules (
 | `user` | utente `value` (uid / sAMAccountName) incluso | contatti AD |
 | `exclude` | utente `value` escluso | contatti AD |
 | `present` / `absent` | requisito: attributo `attr` compilato / vuoto | contatti AD |
+| `notattr` | requisito: attributo `attr` **non** ha valore `value` (es. `description ≠ Dirigente`) | contatti AD |
+| `notadgroup` | requisito: **non** membro del gruppo AD `value`, annidati compresi | contatti AD |
 
 Normalizzazione al salvataggio: uid minuscoli, DN in forma canonica minuscola
 (`ldap.ParseDN`), OU maiuscola trimmata, range validato (`da <= a`, interi).

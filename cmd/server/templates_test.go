@@ -194,3 +194,20 @@ func TestAdminContactsShowsSubAreaCheckboxes(t *testing.T) {
 		t.Errorf("checkbox dirigenti non spuntata: %s", buf.String())
 	}
 }
+
+func TestAdminRulesFormOffersNegativeKindsAndHidesAttr(t *testing.T) {
+	tpl := template.Must(template.New("").ParseFiles("../../web/templates/admin_rules.html"))
+	var buf bytes.Buffer
+	if err := tpl.ExecuteTemplate(&buf, "admin_rules.html", rulesBlock{PostURL: "/x", Target: "#t", FormID: "f"}); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	html := buf.String()
+	for _, want := range []string{`value="notattr"`, `value="notadgroup"`, `onchange="ruleKindChanged(this)"`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("manca %q", want)
+		}
+	}
+	if !regexp.MustCompile(`<input[^>]*name="attr"[^>]*hidden`).MatchString(html) {
+		t.Error("il campo attributo deve partire nascosto (tipo iniziale: OU)")
+	}
+}

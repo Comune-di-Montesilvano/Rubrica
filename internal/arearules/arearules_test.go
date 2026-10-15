@@ -183,3 +183,55 @@ func TestLabel(t *testing.T) {
 		}
 	}
 }
+
+func TestMemberNegativeRequirements(t *testing.T) {
+	p := rossi()
+	interni := Rule{Kind: KindOU, Value: "INTERNI"}
+	cases := []struct {
+		name  string
+		rules []Rule
+		want  bool
+	}{
+		{"notattr esclude il valore (maiuscole/spazi)", []Rule{interni, {Kind: KindNotAttr, Attr: "description", Value: " dirigente "}}, false},
+		{"notattr con altro valore lascia passare", []Rule{interni, {Kind: KindNotAttr, Attr: "description", Value: "Istruttore"}}, true},
+		{"notattr su attributo assente lascia passare", []Rule{interni, {Kind: KindNotAttr, Attr: "title", Value: "x"}}, true},
+		{"notadgroup esclude il membro", []Rule{interni, {Kind: KindNotADGroup, Value: dnDirigenti}}, false},
+		{"notadgroup di altro gruppo lascia passare", []Rule{interni, {Kind: KindNotADGroup, Value: "CN=ALTRO,DC=x"}}, true},
+		{"solo requisiti negativi non bastano", []Rule{{Kind: KindNotAttr, Attr: "description", Value: "Istruttore"}}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := Member(p, c.rules); got != c.want {
+				t.Errorf("Member = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestNegativeKindsNormalizeLabelAndCollect(t *testing.T) {
+	r, err := Normalize(" NotAttr ", "Description", " Dirigente ")
+	if err != nil || r != (Rule{Kind: KindNotAttr, Attr: "description", Value: "Dirigente"}) {
+		t.Errorf("Normalize notattr = %+v, %v", r, err)
+	}
+	g, err := Normalize(KindNotADGroup, "", dnDirigenti)
+	if err != nil || g.Value != CanonicalDNLoose(dnDirigenti) {
+		t.Errorf("Normalize notadgroup = %+v, %v", g, err)
+	}
+	for _, bad := range [][3]string{{KindNotAttr, "1x", "v"}, {KindNotAttr, "description", ""}, {KindNotADGroup, "", "non un dn"}} {
+		if _, err := Normalize(bad[0], bad[1], bad[2]); !errors.Is(err, ErrInvalidRule) {
+			t.Errorf("Normalize(%v) err = %v", bad, err)
+		}
+	}
+	if got := Label(r); got != "description ≠ Dirigente" {
+		t.Errorf("Label notattr = %q", got)
+	}
+	if got := Label(g); got != "Non nel gruppo AD rubrica_dirigenti" {
+		t.Errorf("Label notadgroup = %q", got)
+	}
+	if got := GroupDNs(nil, []Rule{g}); len(got) != 1 {
+		t.Errorf("GroupDNs deve includere notadgroup: %v", got)
+	}
+	if got := Attributes(nil, []Rule{r}); len(got) != 1 || got[0] != "description" {
+		t.Errorf("Attributes deve includere notattr: %v", got)
+	}
+}

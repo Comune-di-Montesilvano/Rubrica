@@ -25,6 +25,9 @@ const (
 	KindExclude  = "exclude"  // utente Value escluso
 	KindPresent  = "present"  // requisito: Attr compilato
 	KindAbsent   = "absent"   // requisito: Attr vuoto
+	// Requisiti negativi: non fanno entrare nessuno, escludono chi li viola.
+	KindNotAttr    = "notattr"    // requisito: Attr non ha valore Value
+	KindNotADGroup = "notadgroup" // requisito: non membro del gruppo AD Value (annidati compresi)
 	KindAttrName = "attrname" // solo suggerimenti admin (nomi di attributo), mai salvato
 )
 
@@ -62,8 +65,8 @@ func ValidAttrName(s string) bool { return attrNameRe.MatchString(s) }
 func norm(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
 
 // Member: almeno una regola d'ingresso (ou/attr/adgroup/range/user)
-// soddisfatta, tutti i requisiti (present/absent) rispettati e nessuna
-// exclude. Nessuna regola = nessun membro.
+// soddisfatta, tutti i requisiti (present/absent/notattr/notadgroup)
+// rispettati e nessuna exclude. Nessuna regola = nessun membro.
 func Member(p Profile, rules []Rule) bool {
 	user := norm(p.Username)
 	in := false
@@ -76,6 +79,18 @@ func Member(p Profile, rules []Rule) bool {
 		case KindPresent, KindAbsent:
 			if hasValue(p.Attrs[norm(r.Attr)]) != (r.Kind == KindPresent) {
 				return false
+			}
+		case KindNotAttr:
+			for _, v := range p.Attrs[norm(r.Attr)] {
+				if norm(v) == norm(r.Value) {
+					return false
+				}
+			}
+		case KindNotADGroup:
+			for _, g := range p.Groups {
+				if SameDN(g, r.Value) {
+					return false
+				}
 			}
 		case KindUser:
 			if user != "" && norm(r.Value) == user {
@@ -164,13 +179,13 @@ func allRules(tree []Node, extra []Rule) []Rule {
 	return out
 }
 
-// GroupDNs: DN canonici distinti citati da regole adgroup (albero + extra),
+// GroupDNs: DN canonici distinti citati da regole adgroup/notadgroup (albero + extra),
 // ordinati. Il sync risolve i membri annidati solo di questi.
 func GroupDNs(tree []Node, extra []Rule) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, r := range allRules(tree, extra) {
-		if r.Kind != KindADGroup {
+		if r.Kind != KindADGroup && r.Kind != KindNotADGroup {
 			continue
 		}
 		dn := CanonicalDNLoose(r.Value)
@@ -184,13 +199,13 @@ func GroupDNs(tree []Node, extra []Rule) []string {
 }
 
 // Attributes: nomi attributo (minuscoli) distinti citati da regole
-// attr/present/absent, ordinati: il sync li aggiunge alla ricerca AD.
+// attr/notattr/present/absent, ordinati: il sync li aggiunge alla ricerca AD.
 func Attributes(tree []Node, extra []Rule) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, r := range allRules(tree, extra) {
 		switch r.Kind {
-		case KindAttr, KindPresent, KindAbsent:
+		case KindAttr, KindNotAttr, KindPresent, KindAbsent:
 			a := norm(r.Attr)
 			if a != "" && !seen[a] {
 				seen[a] = true
@@ -211,7 +226,7 @@ func Normalize(kind, attr, value string) (Rule, error) {
 			return Rule{}, fmt.Errorf("%w: OU vuota", ErrInvalidRule)
 		}
 		return Rule{Kind: kind, Value: strings.ToUpper(value)}, nil
-	case KindAttr:
+	case KindAttr, KindNotAttr:
 		if !ValidAttrName(attr) {
 			return Rule{}, fmt.Errorf("%w: nome di attributo LDAP non valido", ErrInvalidRule)
 		}
@@ -224,7 +239,7 @@ func Normalize(kind, attr, value string) (Rule, error) {
 			return Rule{}, fmt.Errorf("%w: nome di attributo LDAP non valido", ErrInvalidRule)
 		}
 		return Rule{Kind: kind, Attr: strings.ToLower(attr)}, nil
-	case KindADGroup:
+	case KindADGroup, KindNotADGroup:
 		dn, err := CanonicalDN(value)
 		if err != nil {
 			return Rule{}, fmt.Errorf("%w: DN del gruppo non valido", ErrInvalidRule)
@@ -254,6 +269,10 @@ func Label(r Rule) string {
 		return r.Attr + " = " + r.Value
 	case KindADGroup:
 		return "Gruppo AD " + firstRDNValue(r.Value)
+	case KindNotAttr:
+		return r.Attr + " ≠ " + r.Value
+	case KindNotADGroup:
+		return "Non nel gruppo AD " + firstRDNValue(r.Value)
 	case KindRange:
 		if lo, hi, err := ParseRange(r.Value); err == nil {
 			return fmt.Sprintf("Interni %d–%d", lo, hi)

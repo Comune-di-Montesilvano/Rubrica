@@ -45,6 +45,14 @@ func search(conn *ldap.Conn, cfg *config.Config, filter string, attrs []string, 
 
 // Suggest interroga AD dal vivo per i campi delle regole in admin.
 func Suggest(cfg *config.Config, kind, attr, q string) ([]Suggestion, error) {
+	switch kind {
+	case arearules.KindNotAttr:
+		kind = arearules.KindAttr
+	case arearules.KindNotADGroup:
+		kind = arearules.KindADGroup
+	case arearules.KindRange:
+		return nil, nil // nessun suggerimento: si scrive "da-a"
+	}
 	if kind == arearules.KindAttr && !arearules.ValidAttrName(attr) {
 		return nil, ErrInvalidAttr
 	}
