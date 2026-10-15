@@ -1,78 +1,23 @@
 package ldap
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/go-ldap/ldap/v3"
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/arearules"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/config"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
+	"github.com/go-ldap/ldap/v3"
 )
-
-// OUAreaMappingConfigKey è la chiave app_config sotto cui è salvato il
-// mapping OU->Area editabile da admin (JSON, es. {"INTERNI":"interni"}).
-const OUAreaMappingConfigKey = "ou_area_mapping"
 
 // PrimaryNumberPrefixConfigKey è la chiave app_config per il prefisso
 // numero primario, editabile da admin — sostituisce PRIMARY_NUMBER_PREFIX_TEMPLATE
 // come fonte di verità una volta salvato (l'env resta solo il default
 // iniziale per un deploy mai configurato da UI).
 const PrimaryNumberPrefixConfigKey = "primary_number_prefix"
-
-// DefaultOUAreaMapping è usato quando l'admin non ha ancora salvato un
-// mapping personalizzato.
-var DefaultOUAreaMapping = map[string]string{
-	"INTERNI":       "interni",
-	"ESTERNI":       "esterni",
-	"AREA_POLITICA": "politica",
-}
-
-// ClassificationOU estrae il token OU usato per classificare l'Area di un
-// contatto: il primo segmento OU nel DN che non sia il wrapper generico
-// "Users" o "COMUNE-MS" (es. "INTERNI", "ESTERNI", "AREA_POLITICA",
-// "DUMMY"). Esportata perché il pannello admin la usa per elencare le OU
-// note su cui costruire il mapping.
-func ClassificationOU(dn string) string {
-	for _, part := range strings.Split(dn, ",") {
-		part = strings.TrimSpace(part)
-		upper := strings.ToUpper(part)
-		if !strings.HasPrefix(upper, "OU=") {
-			continue
-		}
-		name := strings.TrimPrefix(upper, "OU=")
-		if name == "USERS" || name == "COMUNE-MS" {
-			continue
-		}
-		return name
-	}
-	return ""
-}
-
-func deriveArea(dn string, mapping map[string]string) string {
-	ou := ClassificationOU(dn)
-	if ou == "" {
-		return ""
-	}
-	return mapping[ou]
-}
-
-// loadOUAreaMapping legge il mapping salvato da admin, o il default se non
-// ancora configurato / JSON non valido.
-func loadOUAreaMapping(db *database.DB) map[string]string {
-	raw, err := db.GetConfig(OUAreaMappingConfigKey)
-	if err != nil || raw == "" {
-		return DefaultOUAreaMapping
-	}
-	var m map[string]string
-	if err := json.Unmarshal([]byte(raw), &m); err != nil || len(m) == 0 {
-		return DefaultOUAreaMapping
-	}
-	return m
-}
 
 // loadPrimaryNumberPrefix legge il template prefisso salvato da admin, o
 // quello di config.Config (env, default iniziale) se non ancora configurato.
@@ -83,13 +28,60 @@ func loadPrimaryNumberPrefix(db *database.DB, cfg *config.Config) string {
 	return cfg.PrimaryNumberPrefix
 }
 
-// SyncContacts reads contacts from LDAP and updates the database. onProgress
-// (opzionale, passare nil se non serve) è chiamato con lo stato di
-// avanzamento: onProgress("", 0, 0) durante il bind, onProgress("", 0, total)
-// subito dopo la ricerca (per mostrare "0/total"), poi periodicamente durante
-// l'elaborazione dei contatti — usato dalla UI admin per mostrare un
-// feedback di progresso su un sync che altrimenti sembra "appeso".
+// SyncOptions: Force applica il soft-delete anche oltre la soglia della
+// protezione svuotamento (pulsante "Conferma e applica" in admin).
+type SyncOptions struct{ Force bool }
+
+// SyncReport riassume un sync. StaleHeld > 0 = soft-delete sospeso dalla
+// protezione svuotamento (da mostrare in admin).
+type SyncReport struct {
+	Synced       int
+	OutOfScope   int
+	StaleHeld    int
+	StaleDeleted int
+}
+
+// baseSyncAttributes: attributi sempre richiesti ad AD; quelli citati dalle
+// regole si aggiungono (searchAttributes).
+var baseSyncAttributes = []string{"uid", "sAMAccountName", "userPrincipalName", "mail", "displayName", "cn",
+	"telephoneNumber", "physicalDeliveryOfficeName", "title", "description", "ou", "memberOf", "userAccountControl"}
+
+func searchAttributes(extra []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(baseSyncAttributes)+len(extra))
+	for _, a := range append(append([]string{}, baseSyncAttributes...), extra...) {
+		k := strings.ToLower(a)
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// SyncContacts: sync con opzioni di default. onProgress (opzionale) riceve
+// (0, total) dopo la ricerca e poi l'avanzamento contatto per contatto.
 func SyncContacts(db *database.DB, cfg *config.Config, onProgress func(done, total int)) error {
+	_, err := Sync(db, cfg, SyncOptions{}, onProgress)
+	return err
+}
+
+// loadRules legge albero aree e perimetro dal DB.
+func loadRules(db *database.DB) ([]arearules.Node, []arearules.Rule, error) {
+	tree, err := db.AreaTree()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load area rules: %w", err)
+	}
+	scope, err := db.ListScopeRules()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load scope rules: %w", err)
+	}
+	return tree, database.RulesOf(scope), nil
+}
+
+// Sync legge AD, applica perimetro e regole di area e aggiorna il DB.
+func Sync(db *database.DB, cfg *config.Config, opts SyncOptions, onProgress func(done, total int)) (SyncReport, error) {
+	var report SyncReport
 	if onProgress == nil {
 		onProgress = func(done, total int) {}
 	}
@@ -97,198 +89,259 @@ func SyncContacts(db *database.DB, cfg *config.Config, onProgress func(done, tot
 
 	conn, err := BindForSync(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to bind for sync: %w", err)
+		return report, fmt.Errorf("failed to bind for sync: %w", err)
 	}
 	defer conn.Close()
 
-	searchFilter := buildSyncSearchFilter(cfg)
-
-	// Search for all users
-	searchRequest := ldap.NewSearchRequest(
-		cfg.LDAPBaseDN,
-		ldap.ScopeWholeSubtree,
-		ldap.NeverDerefAliases,
-		0,
-		0,
-		false,
-		searchFilter,
-		[]string{"uid", "sAMAccountName", "userPrincipalName", "mail", "displayName", "cn", "telephoneNumber", "physicalDeliveryOfficeName", "title", "description", "ou", "memberOf", "userAccountControl"},
-		nil,
-	)
-
-	sr, err := conn.Search(searchRequest)
-	if err != nil {
-		if ldapErr, ok := err.(*ldap.Error); ok && ldapErr.ResultCode == ldap.LDAPResultOperationsError {
-			return fmt.Errorf("LDAP search requires authenticated bind (AD 000004DC). Set LDAP_BIND_DN and LDAP_BIND_PASSWORD in .env: %w", err)
-		}
-		return fmt.Errorf("failed to search LDAP: %w", err)
+	if err := migrateScopeRules(db, cfg.LDAPAllowedGroups, groupFinder(conn, cfg.LDAPBaseDN)); err != nil {
+		return report, err
 	}
+	tree, scope, err := loadRules(db)
+	if err != nil {
+		return report, err
+	}
+	entries, err := fetchEntries(conn, cfg, searchAttributes(arearules.Attributes(tree, scope)))
+	if err != nil {
+		return report, err
+	}
+	groupMembers := fetchGroupMembers(conn, cfg, arearules.GroupDNs(tree, scope))
+	onProgress(0, len(entries))
 
 	syncTime := time.Now()
-	areaMapping := loadOUAreaMapping(db)
-	prefixTemplate := loadPrimaryNumberPrefix(db, cfg)
-	// Regole area-per-range (vedi database.Area.RangeStart/RangeEnd): un
-	// contatto senza area da OU mapping il cui interno cade in un range
-	// assegnato prende quella come Area — e la usa anche come Department
-	// se non ne ha già uno, altrimenti resterebbe senza etichetta.
-	areas, err := db.ListAreas()
+	evals, st := evaluateEntries(syncInput{
+		Entries:        entries,
+		GroupMembers:   groupMembers,
+		Tree:           tree,
+		Scope:          scope,
+		OnlyActive:     cfg.LDAPOnlyActive,
+		PrefixTemplate: loadPrimaryNumberPrefix(db, cfg),
+	}, syncTime)
+	report.OutOfScope = st.OutOfScope
+
+	for i, ev := range evals {
+		if err := db.UpsertContact(ev.Contact); err != nil {
+			log.Printf("[SYNC] Failed to upsert contact %s: %v", ev.Contact.UID, err)
+			continue
+		}
+		applySubAreas(db, ev, tree)
+		report.Synced++
+		onProgress(i+1, len(evals))
+	}
+	log.Printf("[SYNC] Successfully synced %d contacts from LDAP", report.Synced)
+
+	// Reconciliation con protezione svuotamento: chi non è stato toccato in
+	// questo giro esce dalla rubrica, ma non se sono troppi (regola di
+	// perimetro sbagliata, AD parziale): in quel caso serve Force.
+	stale, err := db.CountStaleLDAP(syncTime)
 	if err != nil {
-		log.Printf("[SYNC] Failed to list areas for range matching: %v", err)
+		return report, err
 	}
-	count := 0
-	totalEntries := 0
-	filteredByGroup := 0
-	filteredByDisabled := 0
-	missingGroupInfo := 0
-	observedGroups := map[string]int{}
-	onProgress(0, len(sr.Entries))
-
-	for _, entry := range sr.Entries {
-		totalEntries++
-		for _, dn := range entry.GetAttributeValues("memberOf") {
-			if cn := extractCNFromDN(dn); cn != "" {
-				observedGroups[cn]++
-			}
-		}
-		if len(cfg.LDAPAllowedGroups) > 0 && len(entry.GetAttributeValues("memberOf")) == 0 {
-			missingGroupInfo++
-		}
-
-		// Verifica se l'account è attivo (solo per AD). A differenza del
-		// filtro sui gruppi, un account disabilitato NON viene scartato:
-		// viene salvato con disabled=true, mai in rubrica pubblica (tutte
-		// le query pubbliche filtrano disabled=0) ma comunque disponibile
-		// per il matching nome centralino/dominio nell'utility admin
-		// "numero mancante in AD" — un dipendente disattivato in AD ma
-		// ancora presente sul centralino deve poter comparire lì.
-		disabled := false
-		if cfg.LDAPOnlyActive {
-			uacStr := entry.GetAttributeValue("userAccountControl")
-			if uacStr != "" {
-				uac, err := strconv.ParseInt(uacStr, 10, 64)
-				if err == nil && (uac&0x02) != 0 {
-					// Bit 2 (0x02) = ACCOUNTDISABLE
-					disabled = true
-					filteredByDisabled++
-				}
-			}
-		}
-
-		// Il filtro gruppi non si applica agli account disabilitati: quando
-		// un account viene disabilitato in AD è comune che venga anche
-		// rimosso da tutti i gruppi (memberOf svuotato), il che lo farebbe
-		// scartare qui prima ancora di poterlo salvare come disabled=true
-		// — sparendo del tutto invece di comparire nell'utility "numero
-		// mancante in AD" quando è ancora presente sul centralino.
-		if !disabled && !isEntryAllowedByGroups(entry, cfg.LDAPAllowedGroups) {
-			filteredByGroup++
-			continue
-		}
-
-		uid := entry.GetAttributeValue("uid")
-		if uid == "" {
-			uid = entry.GetAttributeValue("sAMAccountName")
-		}
-		if uid == "" {
-			uid = entry.GetAttributeValue("userPrincipalName")
-		}
-		if uid == "" {
-			continue
-		}
-
-		displayName := entry.GetAttributeValue("displayName")
-		if displayName == "" {
-			displayName = entry.GetAttributeValue("cn")
-			if displayName == "" {
-				displayName = uid
-			}
-		}
-
-		email := entry.GetAttributeValue("mail")
-		// Un contatto può avere più interni mappati in AD su telephoneNumber
-		// separati da ";" (es. "700;701", stessa persona) — ldap_ext
-		// conserva il valore grezzo con tutti gli interni (per il matching
-		// PBX/call group, che deve riconoscere ognuno), mentre il numero
-		// primario cliccabile (tel:) usa solo il primo, un href non può
-		// contenere più numeri.
-		telephoneNumber := entry.GetAttributeValue("telephoneNumber")
-
-		department := entry.GetAttributeValue("physicalDeliveryOfficeName")
-		if department == "" {
-			department = entry.GetAttributeValue("ou")
-		}
-
-		title := entry.GetAttributeValue("title")
-		description := normalizeDescription(entry.GetAttributeValue("description"))
-
-		// Generate primary number from template (solo il primo interno)
-		primaryNumber := generatePrimaryNumber(firstExtension(telephoneNumber), prefixTemplate)
-
-		// Extract LDAP groups (CN from memberOf)
-		var ldapGroups []string
-		for _, dn := range entry.GetAttributeValues("memberOf") {
-			if cn := extractCNFromDN(dn); cn != "" {
-				ldapGroups = append(ldapGroups, cn)
-			}
-		}
-		ldapGroupsStr := strings.Join(ldapGroups, ",")
-
-		area := deriveArea(entry.DN, areaMapping)
-		if area == "" {
-			if a := database.MatchExtensionRange(firstExtension(telephoneNumber), areas); a != nil {
-				area = a.Key
-				if department == "" {
-					department = a.Name
-				}
-			}
-		}
-
-		contact := &database.Contact{
-			UID:           uid,
-			DisplayName:   displayName,
-			Email:         email,
-			LDAPExt:       telephoneNumber,
-			PrimaryNumber: primaryNumber,
-			Department:    department,
-			Title:         title,
-			Description:   description,
-			LDAPGroups:    ldapGroupsStr,
-			LDAPDN:        entry.DN,
-			Area:          area,
-			Disabled:      disabled,
-			LastSync:      syncTime,
-		}
-
-		if err := db.UpsertContact(contact); err != nil {
-			log.Printf("[SYNC] Failed to upsert contact %s: %v", uid, err)
-			continue
-		}
-
-		count++
-		onProgress(totalEntries, len(sr.Entries))
+	active, err := db.CountActiveLDAP()
+	if err != nil {
+		return report, err
 	}
-
-	log.Printf("[SYNC] Successfully synced %d contacts from LDAP", count)
-
-	// Reconciliation: qualsiasi contatto attivo il cui last_sync non è
-	// stato aggiornato in questo giro (disabilitato, spostato fuori dai
-	// gruppi consentiti, rimosso da AD) non è più presente nel risultato
-	// corrente — va soft-deleted, altrimenti resta per sempre nei conteggi
-	// Area e nelle ricerche.
-	if staleCount, err := db.SoftDeleteStale(syncTime); err != nil {
+	if !opts.Force && shouldHoldStale(stale, active) {
+		report.StaleHeld = stale
+		log.Printf("[SYNC] Calo anomalo: %d contatti su %d uscirebbero dalla rubrica, soft-delete sospeso: serve conferma da admin", stale, active)
+	} else if n, err := db.SoftDeleteStale(syncTime); err != nil {
 		log.Printf("[SYNC] Failed to soft-delete stale contacts: %v", err)
-	} else if staleCount > 0 {
-		log.Printf("[SYNC] Soft-deleted %d stale contacts (no longer present in LDAP result)", staleCount)
+	} else {
+		report.StaleDeleted = int(n)
+		if n > 0 {
+			log.Printf("[SYNC] Soft-deleted %d stale contacts (no longer present in LDAP result)", n)
+		}
 	}
+	log.Printf("[SYNC] Stats: total=%d disabled=%d outOfScope=%d scopeRules=%d", st.Total, st.Disabled, st.OutOfScope, len(scope))
+	return report, nil
+}
 
-	if cfg.LDAPOnlyActive {
-		log.Printf("[SYNC] Disabled accounts marked inactive (mai in rubrica pubblica): %d of %d total entries", filteredByDisabled, totalEntries)
+// shouldHoldStale: sospende il soft-delete se escono almeno 5 contatti e
+// più del 20% di quelli non cancellati.
+func shouldHoldStale(stale, active int) bool {
+	return stale >= 5 && stale*5 > active
+}
+
+// applySubAreas salva le sotto-aree calcolate per l'area effettivamente
+// salvata: con manual_override l'upsert conserva l'area precedente.
+func applySubAreas(db *database.DB, ev evaluated, tree []arearules.Node) {
+	id, storedArea, err := db.ContactIDAndArea(ev.Contact.UID)
+	if err != nil || id == 0 {
+		log.Printf("[SYNC] Sotto-aree di %s non salvate: %v", ev.Contact.UID, err)
+		return
 	}
-	if len(cfg.LDAPAllowedGroups) > 0 {
-		log.Printf("[SYNC] Group filter stats: total=%d filtered=%d missingMemberOf=%d allowedGroups=%v", totalEntries, filteredByGroup, missingGroupInfo, cfg.LDAPAllowedGroups)
-		log.Printf("[SYNC] Observed memberOf CNs (top up to 30): %v", topObservedGroups(observedGroups, 30))
+	subs := ev.SubAreas
+	if storedArea != ev.Contact.Area {
+		subs = arearules.SubAreasFor(ev.Profile, tree, storedArea)
 	}
-	return nil
+	if err := db.SetContactSubAreas(id, subs); err != nil {
+		log.Printf("[SYNC] Sotto-aree di %s non salvate: %v", ev.Contact.UID, err)
+	}
+}
+
+func fetchEntries(conn *ldap.Conn, cfg *config.Config, attrs []string) ([]*ldap.Entry, error) {
+	req := ldap.NewSearchRequest(cfg.LDAPBaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 0, false,
+		buildSyncSearchFilter(cfg), attrs, nil)
+	sr, err := conn.Search(req)
+	if err != nil {
+		if ldapErr, ok := err.(*ldap.Error); ok && ldapErr.ResultCode == ldap.LDAPResultOperationsError {
+			return nil, fmt.Errorf("LDAP search requires authenticated bind (AD 000004DC). Set LDAP_BIND_DN and LDAP_BIND_PASSWORD in .env: %w", err)
+		}
+		return nil, fmt.Errorf("failed to search LDAP: %w", err)
+	}
+	return sr.Entries, nil
+}
+
+// inChainFilter: utenti membri del gruppo, annidati compresi
+// (LDAP_MATCHING_RULE_IN_CHAIN di AD).
+func inChainFilter(groupDN string) string {
+	return "(memberOf:1.2.840.113556.1.4.1941:=" + ldap.EscapeFilter(groupDN) + ")"
+}
+
+// fetchGroupMembers: DN gruppo → insieme dei DN (canonici) dei membri. Un
+// gruppo inesistente o in errore produce un insieme vuoto, non blocca il sync.
+func fetchGroupMembers(conn *ldap.Conn, cfg *config.Config, groupDNs []string) map[string]map[string]bool {
+	out := make(map[string]map[string]bool, len(groupDNs))
+	for _, g := range groupDNs {
+		members := map[string]bool{}
+		req := ldap.NewSearchRequest(cfg.LDAPBaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 0, false,
+			inChainFilter(g), []string{"dn"}, nil)
+		sr, err := conn.Search(req)
+		switch {
+		case err != nil:
+			log.Printf("[SYNC] Gruppo %s: ricerca membri fallita: %v", g, err)
+		case len(sr.Entries) == 0:
+			log.Printf("[SYNC] Gruppo %s: nessun membro (gruppo inesistente o vuoto)", g)
+		default:
+			for _, e := range sr.Entries {
+				members[arearules.CanonicalDNLoose(e.DN)] = true
+			}
+		}
+		out[g] = members
+	}
+	return out
+}
+
+type syncInput struct {
+	Entries        []*ldap.Entry
+	GroupMembers   map[string]map[string]bool
+	Tree           []arearules.Node
+	Scope          []arearules.Rule
+	OnlyActive     bool
+	PrefixTemplate string
+}
+
+type evaluated struct {
+	Contact  *database.Contact
+	Profile  arearules.Profile
+	SubAreas []string
+}
+
+type evalStats struct{ Total, Disabled, OutOfScope int }
+
+func entryUID(e *ldap.Entry) string {
+	for _, a := range []string{"uid", "sAMAccountName", "userPrincipalName"} {
+		if v := e.GetAttributeValue(a); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func isDisabled(e *ldap.Entry) bool {
+	uac, err := strconv.ParseInt(e.GetAttributeValue("userAccountControl"), 10, 64)
+	return err == nil && uac&0x02 != 0 // bit ACCOUNTDISABLE
+}
+
+func buildProfile(e *ldap.Entry, uid string, groupMembers map[string]map[string]bool) arearules.Profile {
+	attrs := make(map[string][]string, len(e.Attributes))
+	for _, a := range e.Attributes {
+		attrs[strings.ToLower(a.Name)] = a.Values
+	}
+	dn := arearules.CanonicalDNLoose(e.DN)
+	var groups []string
+	for g, members := range groupMembers {
+		if members[dn] {
+			groups = append(groups, g)
+		}
+	}
+	return arearules.Profile{
+		Username:   strings.ToLower(uid),
+		DN:         e.DN,
+		Attrs:      attrs,
+		Groups:     groups,
+		Extensions: SplitExtensions(e.GetAttributeValue("telephoneNumber")),
+	}
+}
+
+// evaluateEntries trasforma le voci AD in contatti: perimetro (gli account
+// disabilitati non passano dal filtro, AD svuota spesso il loro memberOf e
+// devono restare disponibili alla diagnostica del centralino), area e
+// sotto-aree dalle regole, reparto di ripiego = nome dell'area.
+func evaluateEntries(in syncInput, syncTime time.Time) ([]evaluated, evalStats) {
+	var out []evaluated
+	var st evalStats
+	for _, e := range in.Entries {
+		st.Total++
+		disabled := in.OnlyActive && isDisabled(e)
+		if disabled {
+			st.Disabled++
+		}
+		uid := entryUID(e)
+		if uid == "" {
+			continue
+		}
+		p := buildProfile(e, uid, in.GroupMembers)
+		if !disabled && len(in.Scope) > 0 && !arearules.Member(p, in.Scope) {
+			st.OutOfScope++
+			continue
+		}
+		area, subs := arearules.Resolve(p, in.Tree)
+
+		displayName := e.GetAttributeValue("displayName")
+		if displayName == "" {
+			displayName = e.GetAttributeValue("cn")
+		}
+		if displayName == "" {
+			displayName = uid
+		}
+		telephone := e.GetAttributeValue("telephoneNumber")
+		department := e.GetAttributeValue("physicalDeliveryOfficeName")
+		if department == "" {
+			department = e.GetAttributeValue("ou")
+		}
+		if department == "" && area != "" {
+			if n := arearules.FindNode(in.Tree, area); n != nil {
+				department = n.Name
+			}
+		}
+		var groupCNs []string
+		for _, dn := range e.GetAttributeValues("memberOf") {
+			if cn := extractCNFromDN(dn); cn != "" {
+				groupCNs = append(groupCNs, cn)
+			}
+		}
+
+		out = append(out, evaluated{
+			Profile:  p,
+			SubAreas: subs,
+			Contact: &database.Contact{
+				UID:           uid,
+				DisplayName:   displayName,
+				Email:         e.GetAttributeValue("mail"),
+				LDAPExt:       telephone,
+				PrimaryNumber: generatePrimaryNumber(firstExtension(telephone), in.PrefixTemplate),
+				Department:    department,
+				Title:         e.GetAttributeValue("title"),
+				Description:   normalizeDescription(e.GetAttributeValue("description")),
+				LDAPGroups:    strings.Join(groupCNs, ","),
+				LDAPDN:        e.DN,
+				Area:          area,
+				Disabled:      disabled,
+				LastSync:      syncTime,
+			},
+		})
+	}
+	return out, st
 }
 
 // buildSyncSearchFilter costruisce il filtro LDAP di ricerca. Non esclude
@@ -301,63 +354,6 @@ func buildSyncSearchFilter(cfg *config.Config) string {
 		base = "(objectClass=*)"
 	}
 	return base
-}
-
-func isEntryAllowedByGroups(entry *ldap.Entry, allowedGroups []string) bool {
-	if len(allowedGroups) == 0 {
-		return true
-	}
-
-	allowed := make(map[string]struct{}, len(allowedGroups)*2)
-	for _, g := range allowedGroups {
-		for _, alias := range groupAliases(g) {
-			allowed[alias] = struct{}{}
-		}
-	}
-
-	for _, member := range entry.GetAttributeValues("memberOf") {
-		for _, alias := range groupAliases(member) {
-			if _, ok := allowed[alias]; ok {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-func groupAliases(group string) []string {
-	g := strings.TrimSpace(strings.ToLower(group))
-	if g == "" {
-		return nil
-	}
-
-	aliases := map[string]struct{}{g: {}}
-
-	if strings.Contains(g, "\\") {
-		parts := strings.Split(g, "\\")
-		aliases[parts[len(parts)-1]] = struct{}{}
-	}
-
-	if strings.Contains(g, "/") {
-		parts := strings.Split(g, "/")
-		aliases[parts[len(parts)-1]] = struct{}{}
-	}
-
-	if strings.HasPrefix(g, "cn=") {
-		rest := g[3:]
-		if idx := strings.Index(rest, ","); idx > 0 {
-			aliases[rest[:idx]] = struct{}{}
-		} else {
-			aliases[rest] = struct{}{}
-		}
-	}
-
-	out := make([]string, 0, len(aliases))
-	for k := range aliases {
-		out = append(out, k)
-	}
-	return out
 }
 
 // descriptionAliases raccoglie varianti note (typo, maiuscole incoerenti)
@@ -400,38 +396,6 @@ func extractCNFromDN(dn string) string {
 		return strings.ToLower(rest)
 	}
 	return ""
-}
-
-func topObservedGroups(stats map[string]int, limit int) []string {
-	if len(stats) == 0 {
-		return []string{}
-	}
-
-	type kv struct {
-		k string
-		v int
-	}
-	items := make([]kv, 0, len(stats))
-	for k, v := range stats {
-		items = append(items, kv{k: k, v: v})
-	}
-
-	for i := 0; i < len(items); i++ {
-		for j := i + 1; j < len(items); j++ {
-			if items[j].v > items[i].v {
-				items[i], items[j] = items[j], items[i]
-			}
-		}
-	}
-
-	if limit > len(items) {
-		limit = len(items)
-	}
-	out := make([]string, 0, limit)
-	for i := 0; i < limit; i++ {
-		out = append(out, fmt.Sprintf("%s(%d)", items[i].k, items[i].v))
-	}
-	return out
 }
 
 // SplitExtensions divide un valore telephoneNumber AD su più interni

@@ -1,0 +1,6 @@
+{{if .Error}}<div class="helptext">{{.Error}}</div>{{end}}
+{{$t := .Target}}
+{{range .Suggestions}}
+<button type="button" class="suggest-item" data-target="{{$t}}" data-v="{{.Value}}"
+        onclick="var i=document.getElementById(this.dataset.target); i.value=this.dataset.v; this.parentElement.innerHTML='';">{{.Label}}</button>
+{{end}}

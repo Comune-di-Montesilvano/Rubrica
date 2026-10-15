@@ -27,7 +27,10 @@
                     Solo con numero
                 </label>
                 <span class="toolbar-actions">
-                    <button type="button" class="toolbar-link" title="Copia le email di tutti i contatti mostrati" onclick="copyEmails(event, document.getElementById('search-results'), this)">Copia email risultati</button>
+                    <button type="button" class="dept-copy toolbar-copy" title="Copia le email di tutti i contatti mostrati" onclick="copyEmails(event, document.getElementById('search-results'), this)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6l8 6 8-6M4 6h16v12H4V6z"/></svg>
+                        <span class="dept-copy-label">Copia email risultati</span>
+                    </button>
                     <button type="button" class="toolbar-link" id="toggle-groups-btn" onclick="toggleAllGroups()">Comprimi tutto</button>
                 </span>
             </div>
@@ -38,7 +41,7 @@
                 <button type="button" onclick="document.getElementById('prefix-helper').hidden = true; try { localStorage.setItem('ldavsync-prefix-helper-dismissed', '1'); } catch(e) {}" aria-label="Chiudi">&times;</button>
             </div>
 
-            <div id="search-results" hx-get="/search{{if .InitialGroup}}?group={{.InitialGroup}}{{end}}" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
+            <div id="search-results" hx-get="/search{{if .InitialGroup}}?group={{.InitialGroup}}{{if .InitialSub}}&sub={{.InitialSub}}{{end}}{{end}}" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
                 <div class="loading-spinner"><p>Caricamento contatti...</p></div>
             </div>
         </main>
@@ -58,6 +61,10 @@
         function setActiveArea(btn) {
             document.querySelectorAll('.rail-item').forEach(function (i) { i.classList.remove('active'); });
             btn.classList.add('active');
+            // Apre le sotto-aree solo sotto l'area scelta, chiude le altre.
+            var area = btn.dataset.area || '';
+            document.querySelectorAll('.rail-subs').forEach(function (d) { d.hidden = d.dataset.parent !== area; });
+            document.querySelectorAll('.rail-item.has-subs').forEach(function (b) { b.classList.toggle('open', b.dataset.area === area); });
         }
         // focusGroupRow apre la riga del gruppo (e ogni categoria annidata
         // che la contiene, risalendo la catena) e la scrolla in vista —

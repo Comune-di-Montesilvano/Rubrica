@@ -38,22 +38,7 @@ type Contact struct {
 	UpdatedAt      time.Time
 }
 
-// Area rappresenta un'area organizzativa (Interni/Esterni/Politica di
-// default, ma editabile: l'admin può crearne/rinominarne/eliminarne).
-type Area struct {
-	ID        int64
-	Key       string
-	Name      string
-	// RangeStart/RangeEnd (opzionali, nil = nessuna regola) definiscono una
-	// regola "per interno": un contatto/gruppo senza area già assegnata
-	// (da OU mapping o esplicitamente) il cui interno numerico cade in
-	// [RangeStart, RangeEnd] viene assegnato a quest'area — e la prende
-	// anche come reparto/nome gruppo, per non restare senza etichetta.
-	RangeStart *int
-	RangeEnd   *int
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-}
+// Area, AreaRule e le operazioni sull'albero delle aree: vedi areas.go.
 
 type GroupNumber struct {
 	ID           int64
@@ -62,7 +47,7 @@ type GroupNumber struct {
 	Description  string
 	Source       string // "manual" (default) o "pbx"
 	NameOverride bool   // se true, il sync PBX non sovrascrive più Name
-	Area         string // area assegnata da una regola per range interno (vedi Area.RangeStart/RangeEnd), "" se nessuna
+	Area         string // area assegnata dalle regole range (vedi internal/arearules), "" se nessuna
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
@@ -196,6 +181,30 @@ func (db *DB) migrate() error {
 		created_at DATETIME NOT NULL,
 		updated_at DATETIME NOT NULL
 	);
+
+	CREATE TABLE IF NOT EXISTS area_rules (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		area_id INTEGER NOT NULL REFERENCES areas(id) ON DELETE CASCADE,
+		kind TEXT NOT NULL,
+		attr TEXT NOT NULL DEFAULT '',
+		value TEXT NOT NULL DEFAULT '',
+		created_at DATETIME NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS scope_rules (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		kind TEXT NOT NULL,
+		attr TEXT NOT NULL DEFAULT '',
+		value TEXT NOT NULL DEFAULT '',
+		created_at DATETIME NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS contact_sub_areas (
+		contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+		sub_area_key TEXT NOT NULL,
+		PRIMARY KEY (contact_id, sub_area_key)
+	);
+	CREATE INDEX IF NOT EXISTS idx_contact_sub_areas_key ON contact_sub_areas(sub_area_key);
 	`
 
 	if _, err := db.Exec(schema); err != nil {
@@ -214,6 +223,8 @@ func (db *DB) migrate() error {
 		"ALTER TABLE group_numbers ADD COLUMN area TEXT DEFAULT ''",
 		"ALTER TABLE areas ADD COLUMN range_start INTEGER",
 		"ALTER TABLE areas ADD COLUMN range_end INTEGER",
+		"ALTER TABLE areas ADD COLUMN parent_key TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE areas ADD COLUMN sort INTEGER NOT NULL DEFAULT 0",
 	}
 
 	for _, stmt := range alterStatements {
@@ -254,6 +265,10 @@ func (db *DB) migrate() error {
 		if _, err := db.Exec(`INSERT INTO areas (key, name, created_at, updated_at) VALUES ('uffici', 'Uffici', ?, ?)`, now, now); err != nil {
 			log.Printf("[DATABASE] Warning seeding area 'uffici': %v", err)
 		}
+	}
+
+	if err := db.migrateAreaRules(); err != nil {
+		return fmt.Errorf("failed to migrate area rules: %w", err)
 	}
 
 	return nil
@@ -696,11 +711,21 @@ func (db *DB) UpdateManualContact(c *Contact) error {
 // dato gestito a mano, non sincronizzato) un contatto manuale. Ristretto
 // a source='manual' per non poter mai cancellare un contatto LDAP da qui.
 func (db *DB) DeleteManualContact(uid string) error {
-	_, err := db.Exec(`DELETE FROM contacts WHERE uid = ? AND source = 'manual'`, uid)
+	// Le sotto-aree si cancellano esplicitamente: PRAGMA foreign_keys vale
+	// per singola connessione del pool, il cascade non è garantito.
+	tx, err := db.Begin()
 	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM contact_sub_areas WHERE contact_id IN (SELECT id FROM contacts WHERE uid = ? AND source = 'manual')`, uid); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("failed to delete manual contact sub-areas: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM contacts WHERE uid = ? AND source = 'manual'`, uid); err != nil {
+		tx.Rollback()
 		return fmt.Errorf("failed to delete manual contact: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // ListManualContacts returns all source='manual' contacts, alphabetically.
@@ -907,56 +932,6 @@ func (db *DB) ListDuplicateExtensions() ([]DuplicateExtension, error) {
 
 // Area operations
 
-// ListAreas returns all areas, alphabetically by name.
-func (db *DB) ListAreas() ([]*Area, error) {
-	rows, err := db.Query(`SELECT id, key, name, range_start, range_end, created_at, updated_at FROM areas ORDER BY name`)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list areas: %w", err)
-	}
-	defer rows.Close()
-
-	var areas []*Area
-	for rows.Next() {
-		a := &Area{}
-		if err := rows.Scan(&a.ID, &a.Key, &a.Name, &a.RangeStart, &a.RangeEnd, &a.CreatedAt, &a.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("failed to scan area: %w", err)
-		}
-		areas = append(areas, a)
-	}
-	return areas, nil
-}
-
-// SetAreaRange imposta (o rimuove, passando nil) la regola per range
-// interno di un'area — vedi Area.RangeStart/RangeEnd.
-func (db *DB) SetAreaRange(id int64, start, end *int) error {
-	_, err := db.Exec(`UPDATE areas SET range_start = ?, range_end = ?, updated_at = ? WHERE id = ?`, start, end, time.Now(), id)
-	if err != nil {
-		return fmt.Errorf("failed to set area range: %w", err)
-	}
-	return nil
-}
-
-// MatchExtensionRange trova la prima area con una regola di range che
-// copre ext (interpretato come numero) — usato per assegnare un'area a un
-// contatto/gruppo non altrimenti mappato (OU mapping vuoto per i
-// contatti, o gruppo del centralino senza corrispondenza). Nil se ext non
-// è numerico o nessuna regola lo copre.
-func MatchExtensionRange(ext string, areas []*Area) *Area {
-	n, err := strconv.Atoi(ext)
-	if err != nil {
-		return nil
-	}
-	for _, a := range areas {
-		if a.RangeStart == nil || a.RangeEnd == nil {
-			continue
-		}
-		if n >= *a.RangeStart && n <= *a.RangeEnd {
-			return a
-		}
-	}
-	return nil
-}
-
 // MatchGroupCategory ritorna la group_category più specifica (range più
 // stretto) il cui [RangeStart, RangeEnd] contiene ext — a differenza di
 // MatchExtensionRange (che ritorna il primo match nell'ordine di lista e
@@ -1103,53 +1078,6 @@ func (db *DB) DeleteGroupCategory(id int64) error {
 	}
 	if _, err := db.Exec(`DELETE FROM group_categories WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("failed to delete group category: %w", err)
-	}
-	return nil
-}
-
-// CreateArea inserts a new area. Key must be unique (usato come valore di
-// contacts.area e come chiave nel mapping OU->Area).
-func (db *DB) CreateArea(a *Area) error {
-	now := time.Now()
-	a.CreatedAt = now
-	a.UpdatedAt = now
-
-	result, err := db.Exec(`INSERT INTO areas (key, name, created_at, updated_at) VALUES (?, ?, ?, ?)`,
-		a.Key, a.Name, a.CreatedAt, a.UpdatedAt)
-	if err != nil {
-		return fmt.Errorf("failed to create area: %w", err)
-	}
-	id, _ := result.LastInsertId()
-	a.ID = id
-	return nil
-}
-
-// RenameArea updates only the display Name — Key resta stabile perché è
-// referenziato da contacts.area e dal mapping OU->Area salvato altrove.
-func (db *DB) RenameArea(id int64, name string) error {
-	_, err := db.Exec(`UPDATE areas SET name = ?, updated_at = ? WHERE id = ?`, name, time.Now(), id)
-	if err != nil {
-		return fmt.Errorf("failed to rename area: %w", err)
-	}
-	return nil
-}
-
-// DeleteArea removes an area and clears it from any contact currently
-// assigned to it (torna "nessuna area" invece di un riferimento pendente).
-func (db *DB) DeleteArea(id int64) error {
-	var key string
-	if err := db.QueryRow(`SELECT key FROM areas WHERE id = ?`, id).Scan(&key); err != nil {
-		if err == sql.ErrNoRows {
-			return nil
-		}
-		return fmt.Errorf("failed to look up area: %w", err)
-	}
-
-	if _, err := db.Exec(`DELETE FROM areas WHERE id = ?`, id); err != nil {
-		return fmt.Errorf("failed to delete area: %w", err)
-	}
-	if _, err := db.Exec(`UPDATE contacts SET area = '' WHERE area = ?`, key); err != nil {
-		return fmt.Errorf("failed to clear area from contacts: %w", err)
 	}
 	return nil
 }

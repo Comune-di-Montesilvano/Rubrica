@@ -1,0 +1,58 @@
+{{if .Error}}<p class="form-error" role="alert">{{.Error}}</p>{{end}}
+{{if .Rules}}
+<ul class="rule-list">
+    {{$b := .}}
+    {{range .Rules}}
+    <li>
+        <span>{{.Label}}</span>
+        <button hx-post="{{$b.DeleteURLPrefix}}{{.ID}}/delete" hx-target="{{$b.Target}}" hx-swap="innerHTML" class="btn btn-ghost">Togli</button>
+    </li>
+    {{end}}
+</ul>
+{{else}}
+<p class="helptext">Nessuna regola: nessun contatto ne fa parte.</p>
+{{end}}
+
+<form hx-post="{{.PostURL}}" hx-target="{{.Target}}" hx-swap="innerHTML" class="rule-form field-row" style="flex-wrap:wrap;">
+    <select name="kind" class="input" id="{{.FormID}}-kind" style="flex:none;" onchange="ruleKindChanged(this)">
+        <optgroup label="Fa entrare">
+            <option value="ou">OU</option>
+            <option value="adgroup">Gruppo AD</option>
+            <option value="attr">Attributo = valore</option>
+            {{if .AllowRange}}<option value="range">Interni (da-a)</option>{{end}}
+            <option value="user">Utente</option>
+        </optgroup>
+        <optgroup label="Esclude / richiede">
+            <option value="notattr">Escludi se attributo = valore</option>
+            <option value="notadgroup">Escludi membri del gruppo AD</option>
+            <option value="exclude">Escludi utente</option>
+            <option value="present">Richiede attributo compilato</option>
+            <option value="absent">Richiede attributo vuoto</option>
+        </optgroup>
+    </select>
+    <input type="text" name="attr" id="{{.FormID}}-attr" class="input" placeholder="attributo (es. description)" autocomplete="off" hidden
+           hx-get="/admin/ad/suggest" hx-trigger="keyup changed delay:400ms, focus"
+           hx-vals='js:{kind:"attrname", q:document.getElementById("{{.FormID}}-attr").value, target:"{{.FormID}}-attr"}'
+           hx-target="#{{.FormID}}-attr-sugg" hx-swap="innerHTML">
+    <input type="text" name="value" id="{{.FormID}}-value" class="input" placeholder="OU (es. INTERNI)" autocomplete="off"
+           hx-get="/admin/ad/suggest" hx-trigger="keyup changed delay:400ms"
+           hx-vals='js:{kind:document.getElementById("{{.FormID}}-kind").value, attr:document.getElementById("{{.FormID}}-attr").value, q:document.getElementById("{{.FormID}}-value").value, target:"{{.FormID}}-value"}'
+           hx-target="#{{.FormID}}-value-sugg" hx-swap="innerHTML">
+    <button type="submit" class="btn btn-primary" style="flex:none;">Aggiungi regola</button>
+    <div id="{{.FormID}}-attr-sugg" class="suggest-list"></div>
+    <div id="{{.FormID}}-value-sugg" class="suggest-list"></div>
+</form>
+<script>
+// Mostra solo i campi che il tipo di regola usa.
+function ruleKindChanged(sel) {
+    var k = sel.value, f = sel.form;
+    var usesAttr = ['attr', 'notattr', 'present', 'absent'].indexOf(k) >= 0;
+    var usesValue = ['present', 'absent'].indexOf(k) < 0;
+    var ph = {ou: 'OU (es. INTERNI)', adgroup: 'gruppo AD (scrivi per cercare)', notadgroup: 'gruppo AD (scrivi per cercare)',
+              attr: 'valore', notattr: 'valore', range: 'es. 700-799', user: 'username', exclude: 'username'};
+    f.elements['attr'].hidden = !usesAttr;
+    f.elements['value'].hidden = !usesValue;
+    f.elements['value'].placeholder = ph[k] || '';
+    f.querySelectorAll('.suggest-list').forEach(function (d) { d.innerHTML = ''; });
+}
+</script>

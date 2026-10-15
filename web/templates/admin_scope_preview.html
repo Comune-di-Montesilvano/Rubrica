@@ -1,0 +1,14 @@
+{{if .Error}}<p class="helptext">{{.Error}}</p>{{end}}
+{{with .Preview}}
+<div class="scope-preview">
+    <p>Con queste regole entrano <strong>{{.In}}</strong> utenti attivi (oggi in rubrica: <strong>{{.Current}}</strong>).</p>
+    {{if .Entering}}
+    <p class="helptext">Entrerebbero:</p>
+    <ul class="member-list">{{range .Entering}}<li>{{.}}</li>{{end}}{{if .MoreEntering}}<li class="helptext">… e altri {{.MoreEntering}}</li>{{end}}</ul>
+    {{end}}
+    {{if .Leaving}}
+    <p class="helptext">Uscirebbero:</p>
+    <ul class="member-list">{{range .Leaving}}<li>{{.}}</li>{{end}}{{if .MoreLeaving}}<li class="helptext">… e altri {{.MoreLeaving}}</li>{{end}}</ul>
+    {{end}}
+</div>
+{{end}}

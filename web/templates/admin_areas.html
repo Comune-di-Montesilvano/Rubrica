@@ -1,13 +1,15 @@
 <div class="section-head">
-    <h3>Aree</h3>
+    <h3>Aree e sotto-aree</h3>
 </div>
-<p class="helptext" style="margin:8px 0 12px;">Le aree filtrano la rubrica (sidebar) e vengono assegnate alle OU nel mapping sotto. Eliminare un'area la rimuove dai contatti che la usano (tornano "nessuna area"), non elimina i contatti.</p>
-<p class="helptext" style="margin:0 0 12px;">Il "range interni" è una regola alternativa alla mappatura OU: un contatto o gruppo del centralino senza area già assegnata, il cui interno numerico cade nel range, prende quest'area — e la usa anche come reparto/nome, se non ne ha già uno.</p>
+{{if .Error}}<p class="form-error" role="alert">{{.Error}}</p>{{end}}
+<p class="helptext" style="margin:8px 0 12px;">Ogni contatto finisce nella <strong>prima</strong> area, in quest'ordine, di cui soddisfa le regole; poi in <strong>tutte</strong> le sotto-aree di quell'area di cui soddisfa le regole. Le regole si modificano aprendo l'area. Ogni modifica avvia subito un sync.</p>
 
-<table>
-    <thead><tr><th>Nome</th><th>Chiave</th><th>Range interni</th><th></th></tr></thead>
+{{$m := .Messages}}{{$rc := .RuleCounts}}{{$ac := .AreaCounts}}{{$sc := .SubAreaCounts}}
+<table class="area-tree">
+    <thead><tr><th>Nome</th><th>Chiave</th><th>Regole</th><th>Contatti</th><th></th></tr></thead>
     <tbody>
-        {{range .Areas}}
+    {{range .AreaNodes}}
+        {{$parent := .}}
         <tr>
             <td>
                 <form id="area-form-{{.ID}}" hx-post="/admin/areas/{{.ID}}" hx-target="#areas-content" hx-swap="innerHTML" style="margin:0;">
@@ -15,23 +17,51 @@
                 </form>
             </td>
             <td class="num">{{.Key}}</td>
-            <td>
-                <div class="field-row" style="margin:0;">
-                    <input type="text" name="range_start" form="area-form-{{.ID}}" value="{{if .RangeStart}}{{.RangeStart}}{{end}}" placeholder="da" class="input" style="width:70px;">
-                    <span class="helptext">&ndash;</span>
-                    <input type="text" name="range_end" form="area-form-{{.ID}}" value="{{if .RangeEnd}}{{.RangeEnd}}{{end}}" placeholder="a" class="input" style="width:70px;">
-                </div>
-            </td>
+            <td><a href="/admin/areas/{{.ID}}">{{with index $rc .ID}}{{.}} regole{{else}}nessuna regola{{end}}</a></td>
+            <td class="num">{{index $ac .Key}}</td>
             <td>
                 <div class="row-actions">
-                    <button type="submit" form="area-form-{{.ID}}" class="btn btn-ghost">{{index $.Messages "save"}}</button>
-                    <button hx-post="/admin/areas/{{.ID}}/delete" hx-confirm="Eliminare l'area {{.Name}}?" hx-target="#areas-content" hx-swap="innerHTML" class="btn-danger">
-                        {{index $.Messages "delete"}}
-                    </button>
+                    <button type="submit" form="area-form-{{.ID}}" class="btn btn-ghost">{{index $m "save"}}</button>
+                    <button hx-post="/admin/areas/{{.ID}}/move?dir=up" hx-target="#areas-content" hx-swap="innerHTML" class="btn btn-ghost" title="Sposta su">&uarr;</button>
+                    <button hx-post="/admin/areas/{{.ID}}/move?dir=down" hx-target="#areas-content" hx-swap="innerHTML" class="btn btn-ghost" title="Sposta giù">&darr;</button>
+                    {{if ne .Key "uffici"}}
+                    <button hx-post="/admin/areas/{{.ID}}/delete" hx-confirm="Eliminare l'area {{.Name}} con le sue sotto-aree e regole?" hx-target="#areas-content" hx-swap="innerHTML" class="btn-danger">{{index $m "delete"}}</button>
+                    {{end}}
+                </div>
+            </td>
+        </tr>
+        {{range .Children}}
+        <tr class="area-sub-row">
+            <td>
+                <form id="area-form-{{.ID}}" hx-post="/admin/areas/{{.ID}}" hx-target="#areas-content" hx-swap="innerHTML" style="margin:0;padding-left:22px;">
+                    <input type="text" name="name" value="{{.Name}}" class="input" style="width:100%;">
+                </form>
+            </td>
+            <td class="num">{{.Key}}</td>
+            <td><a href="/admin/areas/{{.ID}}">{{with index $rc .ID}}{{.}} regole{{else}}nessuna regola{{end}}</a></td>
+            <td class="num">{{index $sc .Key}}</td>
+            <td>
+                <div class="row-actions">
+                    <button type="submit" form="area-form-{{.ID}}" class="btn btn-ghost">{{index $m "save"}}</button>
+                    <button hx-post="/admin/areas/{{.ID}}/move?dir=up" hx-target="#areas-content" hx-swap="innerHTML" class="btn btn-ghost" title="Sposta su">&uarr;</button>
+                    <button hx-post="/admin/areas/{{.ID}}/move?dir=down" hx-target="#areas-content" hx-swap="innerHTML" class="btn btn-ghost" title="Sposta giù">&darr;</button>
+                    <button hx-post="/admin/areas/{{.ID}}/delete" hx-confirm="Eliminare la sotto-area {{.Name}}?" hx-target="#areas-content" hx-swap="innerHTML" class="btn-danger">{{index $m "delete"}}</button>
                 </div>
             </td>
         </tr>
         {{end}}
+        {{if ne .Key "uffici"}}
+        <tr class="area-sub-row">
+            <td colspan="5">
+                <form hx-post="/admin/areas" hx-target="#areas-content" hx-swap="innerHTML" class="field-row" style="margin:0;padding-left:22px;">
+                    <input type="hidden" name="parent_key" value="{{$parent.Key}}">
+                    <input type="text" name="name" placeholder="Nuova sotto-area di {{$parent.Name}}" class="input" required>
+                    <button type="submit" class="btn btn-ghost" style="flex:none;">Aggiungi sotto-area</button>
+                </form>
+            </td>
+        </tr>
+        {{end}}
+    {{end}}
     </tbody>
 </table>
 

@@ -30,8 +30,10 @@ type Config struct {
 	LDAPTLSSkipVerify  bool
 	LDAPSearchFilter   string
 	LDAPOnlyActive     bool
-	LDAPAllowedGroups  []string
-	LDAPOUFilters      map[string][]string
+	// LDAPAllowedGroups è solo il seed una tantum delle regole di perimetro
+	// (scope_rules, vedi internal/ldap/scope.go): letto al primo sync dopo
+	// l'aggiornamento, poi ignorato. Il perimetro si gestisce da /admin/areas.
+	LDAPAllowedGroups []string
 
 	// Admin
 	AdminUsers []string
@@ -72,20 +74,12 @@ func Load() *Config {
 		LDAPSearchFilter:    getEnv("LDAP_SEARCH_FILTER", "(|(objectClass=inetOrgPerson)(&(objectCategory=person)(objectClass=user)))"),
 		LDAPOnlyActive:      getEnvBool("LDAP_ONLY_ACTIVE", true),
 		LDAPAllowedGroups:   getEnvList("LDAP_ALLOWED_GROUPS", ";", []string{}),
-		LDAPOUFilters:       getEnvMapList("LDAP_OU_FILTERS", ";", ":", ",", defaultOUFilters()),
 		AdminUsers:          getEnvList("ADMIN_USERS", ";", []string{}),
 		SyncIntervalHours:   getEnvInt("SYNC_INTERVAL_HOURS", 1),
 		BackupIntervalHours: getEnvInt("BACKUP_INTERVAL_HOURS", 24),
 		DatabasePath:        getEnv("DATABASE_PATH", "/data/ldavsync.db"),
 		SessionSecret:       getEnv("SESSION_SECRET", "change-me-in-production"),
 		PrimaryNumberPrefix: getEnv("PRIMARY_NUMBER_PREFIX_TEMPLATE", "0854321{ext}"),
-	}
-}
-
-func defaultOUFilters() map[string][]string {
-	return map[string][]string{
-		"interni": {"ou=interni", "/interni"},
-		"esterni": {"ou=esterni", "/esterni"},
 	}
 }
 
@@ -130,48 +124,4 @@ func getEnvList(key, separator string, fallback []string) []string {
 		}
 	}
 	return fallback
-}
-
-func getEnvMapList(key, pairSep, kvSep, listSep string, fallback map[string][]string) map[string][]string {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-
-	result := make(map[string][]string)
-	pairs := strings.Split(value, pairSep)
-	for _, pair := range pairs {
-		pair = strings.TrimSpace(pair)
-		if pair == "" {
-			continue
-		}
-
-		parts := strings.SplitN(pair, kvSep, 2)
-		if len(parts) != 2 {
-			continue
-		}
-
-		k := strings.ToLower(strings.TrimSpace(parts[0]))
-		if k == "" {
-			continue
-		}
-
-		vals := strings.Split(parts[1], listSep)
-		clean := make([]string, 0, len(vals))
-		for _, v := range vals {
-			v = strings.ToLower(strings.TrimSpace(v))
-			if v != "" {
-				clean = append(clean, v)
-			}
-		}
-
-		if len(clean) > 0 {
-			result[k] = clean
-		}
-	}
-
-	if len(result) == 0 {
-		return fallback
-	}
-	return result
 }

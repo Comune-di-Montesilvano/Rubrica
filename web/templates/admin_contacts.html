@@ -1,7 +1,7 @@
 <div class="section-head">
     <h3>Contatti locali</h3>
 </div>
-<p class="helptext" style="margin:8px 0 12px;">Contatti extra-dominio, non sincronizzati da LDAP — creati e gestiti solo qui. Non vengono mai toccati dal sync automatico.</p>
+<p class="helptext" style="margin:8px 0 12px;">Contatti extra-dominio, non sincronizzati da LDAP — creati e gestiti solo qui. Non vengono mai toccati dal sync automatico. Le sotto-aree disponibili dipendono dall'area salvata: cambiando area, salva e poi scegli le sotto-aree.</p>
 
 {{if .Contacts}}
 {{$areas := .Areas}}
@@ -20,6 +20,10 @@
         <option value="{{.Key}}" {{if eq $c.Area .Key}}selected{{end}}>{{.Name}}</option>
         {{end}}
     </select>
+    {{$sel := index $.ContactSubAreas $c.ID}}
+    {{range $.AreaNodes}}{{if eq .Key $c.Area}}{{range .Children}}
+    <label class="toolbar-check" style="flex:none;"><input type="checkbox" name="sub_areas" value="{{.Key}}"{{if index $sel .Key}} checked{{end}}> {{.Name}}</label>
+    {{end}}{{end}}{{end}}
     <button type="submit" class="btn btn-ghost" style="flex:none;">{{index $.Messages "save"}}</button>
     <button type="button" hx-post="/admin/local-contacts/{{$c.UID}}/delete" hx-confirm="Eliminare {{$c.DisplayName}}?"
             hx-target="#contacts-content" hx-swap="innerHTML" class="btn-danger">{{index $.Messages "delete"}}</button>
@@ -43,6 +47,9 @@
             <option value="{{.Key}}">{{.Name}}</option>
             {{end}}
         </select>
+        {{range .AreaNodes}}{{range .Children}}
+        <label class="toolbar-check" style="flex:none;" title="Sotto-area: vale solo se il contatto è nell'area madre"><input type="checkbox" name="sub_areas" value="{{.Key}}"> {{.Name}}</label>
+        {{end}}{{end}}
         <button type="submit" class="btn btn-primary" style="flex:none;">Aggiungi</button>
     </form>
 </div>
