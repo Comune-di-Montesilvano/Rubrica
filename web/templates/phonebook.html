@@ -58,6 +58,10 @@
         function setActiveArea(btn) {
             document.querySelectorAll('.rail-item').forEach(function (i) { i.classList.remove('active'); });
             btn.classList.add('active');
+            // Apre le sotto-aree solo sotto l'area scelta, chiude le altre.
+            var area = btn.dataset.area || '';
+            document.querySelectorAll('.rail-subs').forEach(function (d) { d.hidden = d.dataset.parent !== area; });
+            document.querySelectorAll('.rail-item.has-subs').forEach(function (b) { b.classList.toggle('open', b.dataset.area === area); });
         }
         // focusGroupRow apre la riga del gruppo (e ogni categoria annidata
         // che la contiene, risalendo la catena) e la scrolla in vista —

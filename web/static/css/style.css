@@ -454,3 +454,9 @@ td.num { font-family: 'IBM Plex Mono'; font-variant-numeric: tabular-nums; font-
 @media (max-width: 768px) { .rail-item.rail-sub { padding-left: 12px; } }
 .rule-list li .btn { flex: none; width: auto; }
 .rule-form .input[hidden] { display: none; }
+.rail-subs[hidden] { display: none; }
+.rail-item .chev { width: 15px; height: 15px; flex: 0 0 15px; stroke: var(--ink-soft); transition: transform .15s ease; }
+.rail-item.has-subs.open .chev { transform: rotate(90deg); }
+.rail-subs .rail-item.rail-sub { padding-left: 40px; font-size: 13.5px; }
+.rail-subs .rail-item.rail-sub .n { font-size: 12px; }
+@media (max-width: 768px) { .rail-subs { display: contents; } .rail-subs[hidden] { display: none; } }

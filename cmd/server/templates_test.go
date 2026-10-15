@@ -211,3 +211,46 @@ func TestAdminRulesFormOffersNegativeKindsAndHidesAttr(t *testing.T) {
 		t.Error("il campo attributo deve partire nascosto (tipo iniziale: OU)")
 	}
 }
+
+func renderRail(t *testing.T, section, active string) string {
+	t.Helper()
+	tpl := template.Must(template.New("").ParseFiles("../../web/templates/rail.html"))
+	nodes := []*database.AreaNode{
+		{Area: &database.Area{Key: "interni", Name: "Personale comunale"}, Children: []*database.Area{{Key: "dirigenti", Name: "Dirigenti", ParentKey: "interni"}}},
+		{Area: &database.Area{Key: "esterni", Name: "Esterni"}},
+	}
+	data := map[string]interface{}{
+		"Section": section, "ActiveArea": active, "ActiveSub": "", "Messages": map[string]string{"area_all": "Tutti"},
+		"AreaNodes": nodes, "AreaCounts": map[string]int{"interni": 196}, "SubAreaCounts": map[string]int{"dirigenti": 5}, "Total": 313,
+	}
+	var buf bytes.Buffer
+	if err := tpl.ExecuteTemplate(&buf, "rail.html", data); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	return buf.String()
+}
+
+// Le sotto-aree si aprono solo sotto l'area selezionata.
+func TestRailSubAreasCollapsibleUnderParent(t *testing.T) {
+	closed := renderRail(t, "contacts", "")
+	if !regexp.MustCompile(`<div class="rail-subs" data-parent="interni" hidden>`).MatchString(closed) {
+		t.Error("sotto-aree di interni devono essere chiuse se l'area non è selezionata")
+	}
+	if !strings.Contains(closed, `data-sub="dirigenti"`) {
+		t.Error("le sotto-aree devono esserci nel DOM (aperte via JS al click)")
+	}
+	if strings.Contains(closed, `data-parent="esterni"`) {
+		t.Error("un'area senza sotto-aree non deve avere il contenitore")
+	}
+	open := renderRail(t, "contacts", "interni")
+	if !strings.Contains(open, `<div class="rail-subs" data-parent="interni">`) {
+		t.Error("sotto-aree di interni devono essere aperte con l'area selezionata")
+	}
+	if !strings.Contains(open, "has-subs open") {
+		t.Error("l'area aperta deve avere la freccia girata (classe open)")
+	}
+	admin := renderRail(t, "admin-areas", "")
+	if strings.Contains(admin, "rail-sub") {
+		t.Error("nelle pagine admin la rail mostra solo le aree")
+	}
+}

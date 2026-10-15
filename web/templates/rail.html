@@ -11,18 +11,22 @@
     {{$active := .ActiveArea}}{{$activeSub := .ActiveSub}}{{$sc := .SubAreaCounts}}
     {{range .AreaNodes}}
     {{$area := .}}
-    <button class="rail-item{{if and (eq $active .Key) (not $activeSub)}} active{{end}}" data-area="{{.Key}}"
+    <button class="rail-item{{if .Children}} has-subs{{if eq $active .Key}} open{{end}}{{end}}{{if and (eq $active .Key) (not $activeSub)}} active{{end}}" data-area="{{.Key}}"
             hx-get="/search?group={{.Key}}" hx-target="#search-results"
             onclick="if(window.setActiveArea)setActiveArea(this)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.6 9.6a2 2 0 010 2.8l-8.2 8.2a2 2 0 01-2.8 0L3 14V3h11l6.6 6.6z"/><circle cx="7.5" cy="7.5" r="1.2" fill="currentColor" stroke="none"/></svg>
+        {{if .Children}}<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>{{else}}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.6 9.6a2 2 0 010 2.8l-8.2 8.2a2 2 0 01-2.8 0L3 14V3h11l6.6 6.6z"/><circle cx="7.5" cy="7.5" r="1.2" fill="currentColor" stroke="none"/></svg>{{end}}
         <span>{{.Name}}</span><span class="n">{{index $.AreaCounts .Key}}</span>
     </button>
-    {{range .Children}}
-    <button class="rail-item rail-sub{{if eq $activeSub .Key}} active{{end}}" data-area="{{$area.Key}}" data-sub="{{.Key}}"
-            hx-get="/search?group={{$area.Key}}&sub={{.Key}}" hx-target="#search-results"
-            onclick="if(window.setActiveArea)setActiveArea(this)">
-        <span>{{.Name}}</span><span class="n">{{index $sc .Key}}</span>
-    </button>
+    {{if .Children}}
+    <div class="rail-subs" data-parent="{{.Key}}"{{if ne $active .Key}} hidden{{end}}>
+        {{range .Children}}
+        <button class="rail-item rail-sub{{if eq $activeSub .Key}} active{{end}}" data-area="{{$area.Key}}" data-sub="{{.Key}}"
+                hx-get="/search?group={{$area.Key}}&sub={{.Key}}" hx-target="#search-results"
+                onclick="if(window.setActiveArea)setActiveArea(this)">
+            <span>{{.Name}}</span><span class="n">{{index $sc .Key}}</span>
+        </button>
+        {{end}}
+    </div>
     {{end}}
     {{end}}
     {{else}}
@@ -30,16 +34,11 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg>
         <span>{{index .Messages "area_all"}}</span><span class="n">{{.Total}}</span>
     </a>
-    {{$sc := .SubAreaCounts}}
     {{range .AreaNodes}}
-    {{$area := .}}
     <a href="/?group={{.Key}}" class="rail-item">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.6 9.6a2 2 0 010 2.8l-8.2 8.2a2 2 0 01-2.8 0L3 14V3h11l6.6 6.6z"/><circle cx="7.5" cy="7.5" r="1.2" fill="currentColor" stroke="none"/></svg>
         <span>{{.Name}}</span><span class="n">{{index $.AreaCounts .Key}}</span>
     </a>
-    {{range .Children}}
-    <a href="/?group={{$area.Key}}&sub={{.Key}}" class="rail-item rail-sub"><span>{{.Name}}</span><span class="n">{{index $sc .Key}}</span></a>
-    {{end}}
     {{end}}
     {{end}}
 
