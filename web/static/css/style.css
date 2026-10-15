@@ -187,12 +187,12 @@ a { color: inherit; }
 .dept-name { font-family: 'IBM Plex Sans', sans-serif; font-weight: 600; font-size: 16.5px; letter-spacing: -0.003em; }
 .dept-count { font-size: 14px; color: var(--muted); font-family: 'IBM Plex Mono'; font-variant-numeric: tabular-nums; }
 .dept-copy {
-    margin-left: auto; display: inline-flex; align-items: center; gap: 5px;
-    background: none; border: 1px solid transparent; border-radius: 4px; padding: 1px 6px;
-    color: var(--muted); font-size: 13px; font-family: 'IBM Plex Sans'; cursor: pointer;
+    margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+    background: var(--accent-tint); border: 1px solid var(--accent); border-radius: 6px; padding: 3px 10px;
+    color: var(--accent); font-size: 13px; font-weight: 500; font-family: 'IBM Plex Sans'; cursor: pointer;
 }
 .dept-copy svg { width: 14px; height: 14px; }
-.dept-copy:hover { color: var(--accent); border-color: var(--line); }
+.dept-copy:hover { background: var(--accent); color: var(--paper-raised); }
 .dept-tag { margin-left: auto; font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; }
 
 .row {
@@ -460,3 +460,4 @@ td.num { font-family: 'IBM Plex Mono'; font-variant-numeric: tabular-nums; font-
 .rail-subs .rail-item.rail-sub { padding-left: 40px; font-size: 13.5px; }
 .rail-subs .rail-item.rail-sub .n { font-size: 12px; }
 @media (max-width: 768px) { .rail-subs { display: contents; } .rail-subs[hidden] { display: none; } }
+.toolbar-copy { margin-left: 0; font-size: 14px; padding: 4px 12px; }

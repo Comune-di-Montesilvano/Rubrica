@@ -27,7 +27,10 @@
                     Solo con numero
                 </label>
                 <span class="toolbar-actions">
-                    <button type="button" class="toolbar-link" title="Copia le email di tutti i contatti mostrati" onclick="copyEmails(event, document.getElementById('search-results'), this)">Copia email risultati</button>
+                    <button type="button" class="dept-copy toolbar-copy" title="Copia le email di tutti i contatti mostrati" onclick="copyEmails(event, document.getElementById('search-results'), this)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6l8 6 8-6M4 6h16v12H4V6z"/></svg>
+                        <span class="dept-copy-label">Copia email risultati</span>
+                    </button>
                     <button type="button" class="toolbar-link" id="toggle-groups-btn" onclick="toggleAllGroups()">Comprimi tutto</button>
                 </span>
             </div>
