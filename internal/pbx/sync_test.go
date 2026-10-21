@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Comune-di-Montesilvano/Rubrica/internal/arearules"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
 )
 
@@ -258,5 +259,54 @@ func TestApplyCallGroupsDeletesDisappearedGroups(t *testing.T) {
 	}
 	if got, _ := db.GetGroupByNumber("111"); got != nil {
 		t.Error("gruppo 111 doveva essere cancellato, non compare più tra i call group del centralino")
+	}
+}
+
+func TestApplyPeersUsesRangeRules(t *testing.T) {
+	db := newTestDB(t)
+	a, _ := db.GetAreaByKey("uffici")
+	if err := db.AddAreaRule(a.ID, arearules.Rule{Kind: "range", Value: "750-759"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateArea(&database.Area{Key: "centralino", Name: "Centralino", ParentKey: "uffici"}); err != nil {
+		t.Fatal(err)
+	}
+	sub, _ := db.GetAreaByKey("centralino")
+	db.AddAreaRule(sub.ID, arearules.Rule{Kind: "range", Value: "750-750"})
+
+	if _, err := ApplyPeers(db, []Peer{{Extension: "750", CallerID: "Portineria"}, {Extension: "900", CallerID: "Altro"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := db.GetContact("pbx-750")
+	if c.Area != "uffici" || c.Department != "Uffici" {
+		t.Errorf("pbx-750 area=%q dept=%q", c.Area, c.Department)
+	}
+	subs, _ := db.ListSubAreasForContacts([]int64{c.ID})
+	if len(subs[c.ID]) != 1 || subs[c.ID][0] != "centralino" {
+		t.Errorf("sotto-aree pbx-750 = %v", subs[c.ID])
+	}
+	if c, _ := db.GetContact("pbx-900"); c.Area != "" {
+		t.Errorf("pbx-900 area = %q, want vuota", c.Area)
+	}
+}
+
+func TestReapplyAreas(t *testing.T) {
+	db := newTestDB(t)
+	if _, err := ApplyPeers(db, []Peer{{Extension: "760", CallerID: "X"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyCallGroups(db, []CallGroup{{Extension: "761", Name: "G"}}); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := db.GetAreaByKey("esterni")
+	db.AddAreaRule(a.ID, arearules.Rule{Kind: "range", Value: "760-769"})
+	if err := ReapplyAreas(db); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := db.GetContact("pbx-760"); c.Area != "esterni" {
+		t.Errorf("contatto area = %q", c.Area)
+	}
+	if g, _ := db.GetGroupByNumber("761"); g.Area != "esterni" {
+		t.Errorf("gruppo area = %q", g.Area)
 	}
 }

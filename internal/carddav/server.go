@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gorilla/mux"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/config"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/database"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/ldap"
+	"github.com/gorilla/mux"
 )
 
 // Server handles CardDAV protocol requests
@@ -107,7 +107,16 @@ func (s *Server) handlePropFind(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
-	contacts = s.filterContactsByBook(contacts, book)
+	contacts, ok, err := s.contactsForBook(book, contacts)
+	if err != nil {
+		log.Printf("[CARDDAV] Failed to filter book %s: %v", book, err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
 
 	log.Printf("[CARDDAV] PROPFIND returning %d contacts for book %s", len(contacts), book)
 
@@ -189,7 +198,16 @@ func (s *Server) handleReportWithVCards(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
-	contacts = s.filterContactsByBook(contacts, book)
+	contacts, ok, err := s.contactsForBook(book, contacts)
+	if err != nil {
+		log.Printf("[CARDDAV] Failed to filter book %s: %v", book, err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
 
 	log.Printf("[CARDDAV] REPORT returning %d contacts with vCard data for book %s", len(contacts), book)
 
@@ -258,9 +276,10 @@ func (s *Server) handleGetVCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enforce OU filter also on direct vCard fetch for collection-specific URLs.
-	if !s.contactMatchesBook(contact, book) {
-		log.Printf("[CARDDAV] Contact %s does not match book %s", uid, book)
+	// Anche il GET diretto di una vCard rispetta la rubrica richiesta.
+	in, ok, err := s.contactInBook(contact, book)
+	if err != nil || !ok || !in {
+		log.Printf("[CARDDAV] Contact %s not in book %s", uid, book)
 		http.NotFound(w, r)
 		return
 	}
@@ -292,46 +311,6 @@ func (s *Server) collectionPath(book string) string {
 		return "/carddav/"
 	}
 	return fmt.Sprintf("/carddav/%s/", book)
-}
-
-func (s *Server) bookDisplayName(book string) string {
-	if book == "" || book == "all" {
-		return "Rubrica Contatti"
-	}
-	return fmt.Sprintf("Rubrica %s", strings.Title(book))
-}
-
-func (s *Server) filterContactsByBook(contacts []*database.Contact, book string) []*database.Contact {
-	if book == "" || book == "all" {
-		return contacts
-	}
-
-	filtered := make([]*database.Contact, 0, len(contacts))
-	for _, c := range contacts {
-		if s.contactMatchesBook(c, book) {
-			filtered = append(filtered, c)
-		}
-	}
-	return filtered
-}
-
-func (s *Server) contactMatchesBook(contact *database.Contact, book string) bool {
-	if book == "" || book == "all" {
-		return true
-	}
-
-	dn := strings.ToLower(contact.LDAPDN)
-	patterns := s.cfg.LDAPOUFilters[book]
-	if len(patterns) == 0 {
-		patterns = []string{"ou=" + book, "/" + book}
-	}
-
-	for _, pattern := range patterns {
-		if strings.Contains(dn, strings.ToLower(pattern)) {
-			return true
-		}
-	}
-	return false
 }
 
 func generateVCard(contact *database.Contact, groups []*database.GroupNumber) string {
@@ -380,4 +359,51 @@ func generateVCard(contact *database.Contact, groups []*database.GroupNumber) st
 	sb.WriteString("END:VCARD\r\n")
 
 	return sb.String()
+}
+
+// resolveBook: "all" = tutta la rubrica; altrimenti key di un'area di primo
+// livello o di una sotto-area. ok=false se la key non esiste.
+func (s *Server) resolveBook(book string) (*database.Area, bool, error) {
+	if book == "" || book == "all" {
+		return nil, true, nil
+	}
+	a, err := s.db.GetAreaByKey(book)
+	if err != nil || a == nil {
+		return nil, false, err
+	}
+	return a, true, nil
+}
+
+// contactsForBook filtra i contatti della rubrica richiesta: area di primo
+// livello = contacts.area, sotto-area = contact_sub_areas.
+func (s *Server) contactsForBook(book string, contacts []*database.Contact) ([]*database.Contact, bool, error) {
+	a, ok, err := s.resolveBook(book)
+	if err != nil || !ok || a == nil {
+		return contacts, ok, err
+	}
+	var inSub map[int64]bool
+	if a.ParentKey != "" {
+		if inSub, err = s.db.ContactIDsBySubArea(a.Key); err != nil {
+			return nil, true, err
+		}
+	}
+	out := make([]*database.Contact, 0, len(contacts))
+	for _, c := range contacts {
+		if (a.ParentKey == "" && c.Area == a.Key) || (a.ParentKey != "" && inSub[c.ID]) {
+			out = append(out, c)
+		}
+	}
+	return out, true, nil
+}
+
+func (s *Server) contactInBook(c *database.Contact, book string) (bool, bool, error) {
+	got, ok, err := s.contactsForBook(book, []*database.Contact{c})
+	return len(got) == 1, ok, err
+}
+
+func (s *Server) bookDisplayName(book string) string {
+	if a, ok, err := s.resolveBook(book); err == nil && ok && a != nil {
+		return "Rubrica " + a.Name
+	}
+	return "Rubrica Contatti"
 }

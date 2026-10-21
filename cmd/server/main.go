@@ -12,15 +12,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unicode"
 
-	"github.com/gorilla/mux"
-	"github.com/gorilla/sessions"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/backup"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/carddav"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/config"
@@ -30,6 +27,8 @@ import (
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/ldapserver"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/pbx"
 	"github.com/Comune-di-Montesilvano/Rubrica/internal/phonebook"
+	"github.com/gorilla/mux"
+	"github.com/gorilla/sessions"
 )
 
 var (
@@ -80,10 +79,18 @@ func (s *syncStatus) setPhase(phase string) {
 func (s *syncStatus) finish(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.finishLocked(err)
+}
+
+// finishLocked: come finish, con s.mu già acquisito dal chiamante.
+func (s *syncStatus) finishLocked(err error) {
 	s.Running = false
 	if err != nil {
 		s.IsError = true
 		s.Message = "Sync fallito: " + err.Error()
+	} else if held := getLastSyncReport().StaleHeld; held > 0 && s == ldapManualSync {
+		s.IsError = true
+		s.Message = fmt.Sprintf("Calo anomalo: %d contatti uscirebbero dalla rubrica. Cancellazione sospesa: verifica il perimetro in Aree e conferma.", held)
 	} else {
 		s.IsError = false
 		s.Message = "Sync completato con successo."
@@ -241,10 +248,8 @@ func main() {
 
 	// Perform initial sync
 	go func() {
-		if err := ldap.SyncContacts(db, cfg, nil); err != nil {
+		if err := runLDAPSync(ldap.SyncOptions{}, nil); err != nil {
 			log.Printf("[SYNC] Initial sync failed: %v", err)
-		} else {
-			lastSync = time.Now()
 		}
 		if result, err := pbx.SyncPBX(db, nil); err != nil {
 			log.Printf("[PBX] Initial sync failed: %v", err)
@@ -290,14 +295,19 @@ func main() {
 	admin.HandleFunc("/groups/{id}/members", handleAdminAddMember).Methods("POST")
 	admin.HandleFunc("/groups/{id}/members/{contact_id}/delete", handleAdminRemoveMember).Methods("POST")
 	admin.HandleFunc("/groups/{id}/contacts/search", handleAdminContactSearch).Methods("GET")
-	admin.HandleFunc("/ou-mapping", handleAdminOUMapping).Methods("GET")
-	admin.HandleFunc("/ou-mapping", handleAdminSaveOUMapping).Methods("POST")
-	admin.HandleFunc("/ou-mapping/add", handleAdminAddOU).Methods("POST")
-	admin.HandleFunc("/ou-mapping/{ou}/delete", handleAdminDeleteOU).Methods("POST")
 	admin.HandleFunc("/areas", handleAdminAreas).Methods("GET")
 	admin.HandleFunc("/areas", handleAdminCreateArea).Methods("POST")
 	admin.HandleFunc("/areas/{id}", handleAdminRenameArea).Methods("POST")
+	admin.HandleFunc("/areas/{id}/move", handleAdminMoveArea).Methods("POST")
 	admin.HandleFunc("/areas/{id}/delete", handleAdminDeleteArea).Methods("POST")
+	admin.HandleFunc("/areas/{id}", handleAdminAreaDetail).Methods("GET")
+	admin.HandleFunc("/areas/{id}/rules", handleAdminAddAreaRule).Methods("POST")
+	admin.HandleFunc("/areas/{id}/rules/{rid}/delete", handleAdminDeleteAreaRule).Methods("POST")
+	admin.HandleFunc("/ad/suggest", handleAdminADSuggest).Methods("GET")
+	admin.HandleFunc("/scope/rules", handleAdminAddScopeRule).Methods("POST")
+	admin.HandleFunc("/scope/rules/{rid}/delete", handleAdminDeleteScopeRule).Methods("POST")
+	admin.HandleFunc("/scope/preview", handleAdminScopePreview).Methods("GET")
+	admin.HandleFunc("/scope/apply", handleAdminScopeApply).Methods("POST")
 	admin.HandleFunc("/group-categories", handleAdminGroupCategories).Methods("GET")
 	admin.HandleFunc("/group-categories", handleAdminCreateGroupCategory).Methods("POST")
 	admin.HandleFunc("/group-categories/{id}", handleAdminUpdateGroupCategory).Methods("POST")
@@ -344,10 +354,8 @@ func ldapSyncWorker() {
 
 	for range ticker.C {
 		log.Printf("[SYNC] Starting scheduled sync...")
-		if err := ldap.SyncContacts(db, cfg, nil); err != nil {
+		if err := runLDAPSync(ldap.SyncOptions{}, nil); err != nil {
 			log.Printf("[SYNC] Failed: %v", err)
-		} else {
-			lastSync = time.Now()
 		}
 		if result, err := pbx.SyncPBX(db, nil); err != nil {
 			log.Printf("[PBX] Failed: %v", err)
@@ -445,23 +453,43 @@ func railData() map[string]interface{} {
 	for _, n := range counts {
 		total += n
 	}
+	// Uffici mostra le chiamate di gruppo visibili (almeno un membro
+	// attivo, come in rubrica), non i contatti con area uffici: aggiunte
+	// dopo il Total, che resta il numero dei contatti.
+	if pbService != nil {
+		if groups, err := pbService.ListGroupsWithMembers(); err == nil {
+			for _, g := range groups {
+				if len(g.ActiveMembers()) > 0 {
+					counts["uffici"]++
+				}
+			}
+		}
+	}
 
 	areas, err := db.ListAreas()
 	if err != nil {
 		log.Printf("[RAIL] Failed to list areas: %v", err)
 	}
+	subCounts, err := db.CountBySubArea()
+	if err != nil {
+		log.Printf("[RAIL] Failed to count by sub-area: %v", err)
+		subCounts = map[string]int{}
+	}
 
 	return map[string]interface{}{
-		"AreaCounts": counts,
-		"Total":      total,
-		"Areas":      areas,
-		"AppVersion": AppVersion,
+		"AreaCounts":    counts,
+		"SubAreaCounts": subCounts,
+		"AreaNodes":     database.BuildAreaNodes(areas),
+		"Total":         total,
+		"Areas":         areas,
+		"AppVersion":    AppVersion,
 	}
 }
 
 func handleIndex(w http.ResponseWriter, r *http.Request) {
 	locale := i18n.ResolveLocale(r)
 	activeArea := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("group")))
+	activeSub := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sub")))
 
 	prefix, _ := db.GetConfig(ldap.PrimaryNumberPrefixConfigKey)
 	if prefix == "" {
@@ -474,6 +502,8 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 	data["Locale"] = locale
 	data["ActiveArea"] = activeArea
 	data["InitialGroup"] = activeArea
+	data["ActiveSub"] = activeSub
+	data["InitialSub"] = activeSub
 	data["Username"] = sessionAdminUsername(r)
 	data["Section"] = "contacts"
 	data["PrefixHelperText"] = i18n.T(locale, "prefix_helper", prefixDigits)
@@ -483,6 +513,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 func handleSearch(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	groupFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("group")))
+	subFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sub")))
 
 	var (
 		results []*phonebook.ContactWithGroups
@@ -500,6 +531,17 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
+
+	names := map[string]string{}
+	if areas, err := db.ListAreas(); err == nil {
+		for _, a := range areas {
+			names[a.Key] = a.Name
+		}
+	}
+	if err := pbService.AttachSubAreas(results, names); err != nil {
+		log.Printf("[SEARCH] Failed to load sub-areas: %v", err)
+	}
+	results = filterBySubArea(results, subFilter)
 
 	if groupFilter != "" {
 		filtered := make([]*phonebook.ContactWithGroups, 0, len(results))
@@ -526,8 +568,12 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 	// migrate() in internal/database) oltre che nell'elenco non filtrato.
 	// Un filtro testuale le riguarda comunque: cerca anche per
 	// numero/nome del gruppo.
+	// Le chiamate di gruppo compaiono ovunque: ad albero nella colonna di
+	// destra (Tutti e ogni area/sotto-area), oppure in sezioni lineari
+	// nella colonna principale quando si apre l'area "uffici".
+	ufficiView := groupFilter == "uffici" && subFilter == ""
 	var callGroups []*phonebook.GroupWithMembers
-	if groupFilter == "" || groupFilter == "uffici" {
+	{
 		allGroups, err := pbService.ListGroupsWithMembers()
 		if err != nil {
 			log.Printf("[SEARCH] Failed to list call groups: %v", err)
@@ -582,6 +628,12 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var callGroupSections []*phonebook.GroupSection
+	if ufficiView {
+		callGroupSections = phonebook.FlattenGroupCategoryTree(callGroupTree, uncategorizedGroups)
+		callGroups, callGroupTree, uncategorizedGroups, groupMatches = nil, nil, nil, nil
+	}
+
 	locale := i18n.ResolveLocale(r)
 	data := map[string]interface{}{
 		"Groups":              phonebook.GroupByDepartment(results),
@@ -589,6 +641,7 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		"CallGroupTree":       callGroupTree,
 		"UncategorizedGroups": uncategorizedGroups,
 		"GroupMatches":        groupMatches,
+		"CallGroupSections":   callGroupSections,
 		"Messages":            i18n.GetMessages(locale),
 	}
 
@@ -795,22 +848,7 @@ func handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 // finché non risulta completato (successo o errore), invece di restare con
 // un bottone senza alcun feedback per tutta la durata del sync.
 func handleAdminSync(w http.ResponseWriter, r *http.Request) {
-	ldapManualSync.start()
-	go func() {
-		err := ldap.SyncContacts(db, cfg, func(done, total int) {
-			if total > 0 {
-				ldapManualSync.setPhase(fmt.Sprintf("Elaborazione contatti: %d/%d", done, total))
-			}
-		})
-		if err != nil {
-			log.Printf("[SYNC] Manual sync failed: %v", err)
-		} else {
-			lastSync = time.Now()
-			log.Printf("[SYNC] Manual sync completed")
-		}
-		ldapManualSync.finish(err)
-	}()
-
+	startLDAPSync(r.FormValue("force") == "1")
 	renderSyncStatus(w, r)
 }
 
@@ -1055,236 +1093,6 @@ func handleAdminContactSearch(w http.ResponseWriter, r *http.Request) {
 	templates.ExecuteTemplate(w, "admin_contact_search.html", data)
 }
 
-// loadOUMapping legge il mapping salvato, o il default se non ancora
-// configurato / JSON non valido.
-func loadOUMapping() map[string]string {
-	raw, _ := db.GetConfig(ldap.OUAreaMappingConfigKey)
-	if raw == "" {
-		return ldap.DefaultOUAreaMapping
-	}
-	var stored map[string]string
-	if err := json.Unmarshal([]byte(raw), &stored); err != nil || len(stored) == 0 {
-		return ldap.DefaultOUAreaMapping
-	}
-	return stored
-}
-
-// buildOUMappingData raccoglie i dati per la sezione mapping OU->Area:
-// l'unione delle OU viste nei dati LDAP e di quelle già mappate a mano
-// (una OU aggiunta manualmente per un contatto non ancora sincronizzato
-// non deve sparire dalla lista solo perché nessun contatto la usa ancora).
-func buildOUMappingData(r *http.Request) (map[string]interface{}, error) {
-	dns, err := db.ListDistinctLDAPDNs()
-	if err != nil {
-		return nil, fmt.Errorf("failed to list OUs: %w", err)
-	}
-
-	mapping := loadOUMapping()
-
-	ouSet := make(map[string]bool)
-	for _, dn := range dns {
-		if ou := ldap.ClassificationOU(dn); ou != "" {
-			ouSet[ou] = true
-		}
-	}
-	for ou := range mapping {
-		ouSet[ou] = true
-	}
-	ous := make([]string, 0, len(ouSet))
-	for ou := range ouSet {
-		ous = append(ous, ou)
-	}
-	sort.Strings(ous)
-
-	areas, err := db.ListAreas()
-	if err != nil {
-		log.Printf("[ADMIN] Failed to list areas: %v", err)
-	}
-
-	locale := i18n.ResolveLocale(r)
-	return map[string]interface{}{
-		"OUs":      ous,
-		"Mapping":  mapping,
-		"Areas":    areas,
-		"Messages": i18n.GetMessages(locale),
-	}, nil
-}
-
-// renderOUMapping re-renders solo il frammento (usato dopo save/add via
-// HTMX, che sostituisce #ou-mapping-content in place).
-func renderOUMapping(w http.ResponseWriter, r *http.Request) {
-	data, err := buildOUMappingData(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	templates.ExecuteTemplate(w, "admin_ou_mapping.html", data)
-}
-
-// handleAdminAddOU aggiunge una nuova OU (digitata a mano) al mapping,
-// senza richiedere che sia già stata vista in un sync — serve per
-// preparare in anticipo l'area di contatti extra-dominio non ancora
-// presenti.
-func handleAdminAddOU(w http.ResponseWriter, r *http.Request) {
-	ou := strings.ToUpper(strings.TrimSpace(r.FormValue("new_ou")))
-	area := strings.TrimSpace(r.FormValue("new_area"))
-	if ou == "" {
-		renderOUMapping(w, r)
-		return
-	}
-
-	mapping := loadOUMapping()
-	// copia: loadOUMapping può ritornare la mappa di default condivisa,
-	// non va mutata in place.
-	updated := make(map[string]string, len(mapping)+1)
-	for k, v := range mapping {
-		updated[k] = v
-	}
-	if area != "" {
-		updated[ou] = area
-	} else if _, exists := updated[ou]; !exists {
-		updated[ou] = ""
-	}
-
-	raw, err := json.Marshal(updated)
-	if err != nil {
-		http.Error(w, "Failed to encode mapping", http.StatusInternalServerError)
-		return
-	}
-	if err := db.SetConfig(ldap.OUAreaMappingConfigKey, string(raw)); err != nil {
-		http.Error(w, "Failed to save mapping", http.StatusInternalServerError)
-		return
-	}
-
-	renderOUMapping(w, r)
-}
-
-// handleAdminDeleteOU rimuove una singola associazione OU->Area,
-// indipendentemente dalle altre righe della tabella — azione esplicita,
-// non affidata al side-effect implicito di "seleziona Nessuna e salva
-// tutto" che risultava poco affidabile/scopribile.
-func handleAdminDeleteOU(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	ou := vars["ou"]
-
-	mapping := loadOUMapping()
-	updated := make(map[string]string, len(mapping))
-	for k, v := range mapping {
-		if k == ou {
-			continue
-		}
-		updated[k] = v
-	}
-
-	raw, err := json.Marshal(updated)
-	if err != nil {
-		http.Error(w, "Failed to encode mapping", http.StatusInternalServerError)
-		return
-	}
-	if err := db.SetConfig(ldap.OUAreaMappingConfigKey, string(raw)); err != nil {
-		http.Error(w, "Failed to save mapping", http.StatusInternalServerError)
-		return
-	}
-
-	renderOUMapping(w, r)
-}
-
-// handleAdminOUMapping serve la pagina "Mapping OU" completa (navigazione
-// diretta) — le scritture (save/add) continuano a ricevere solo il
-// frammento via renderOUMapping.
-func handleAdminOUMapping(w http.ResponseWriter, r *http.Request) {
-	content, err := buildOUMappingData(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	data := railData()
-	for k, v := range content {
-		data[k] = v
-	}
-	data["Username"] = sessionAdminUsername(r)
-	data["Section"] = "admin-ou-mapping"
-	templates.ExecuteTemplate(w, "admin_page_ou_mapping.html", data)
-}
-
-// handleAdminSaveOUMapping salva il mapping OU->Area scelto dall'admin e
-// avvia subito un resync in background, così l'effetto si vede senza
-// dover aspettare il prossimo ciclo orario.
-func handleAdminSaveOUMapping(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Invalid form", http.StatusBadRequest)
-		return
-	}
-
-	mapping := make(map[string]string)
-	for key, vals := range r.Form {
-		if !strings.HasPrefix(key, "area_") || len(vals) == 0 {
-			continue
-		}
-		ou := strings.TrimPrefix(key, "area_")
-		if area := strings.TrimSpace(vals[0]); area != "" {
-			mapping[ou] = area
-		}
-	}
-
-	raw, err := json.Marshal(mapping)
-	if err != nil {
-		http.Error(w, "Failed to encode mapping", http.StatusInternalServerError)
-		return
-	}
-	if err := db.SetConfig(ldap.OUAreaMappingConfigKey, string(raw)); err != nil {
-		http.Error(w, "Failed to save mapping", http.StatusInternalServerError)
-		return
-	}
-
-	go func() {
-		if err := ldap.SyncContacts(db, cfg, nil); err != nil {
-			log.Printf("[SYNC] Resync after OU mapping change failed: %v", err)
-		} else {
-			lastSync = time.Now()
-		}
-	}()
-
-	renderOUMapping(w, r)
-}
-
-// renderAdminAreas re-renders the CRUD aree section (list + form nuova
-// area + rinomina/elimina).
-func renderAdminAreas(w http.ResponseWriter, r *http.Request) {
-	areas, err := db.ListAreas()
-	if err != nil {
-		http.Error(w, "Failed to list areas", http.StatusInternalServerError)
-		return
-	}
-
-	locale := i18n.ResolveLocale(r)
-	data := map[string]interface{}{
-		"Areas":    areas,
-		"Messages": i18n.GetMessages(locale),
-	}
-	templates.ExecuteTemplate(w, "admin_areas.html", data)
-}
-
-// handleAdminAreas serve la pagina "Aree" completa (navigazione diretta)
-// — le scritture (crea/rinomina/elimina) continuano a ricevere solo il
-// frammento via renderAdminAreas.
-func handleAdminAreas(w http.ResponseWriter, r *http.Request) {
-	areas, err := db.ListAreas()
-	if err != nil {
-		http.Error(w, "Failed to list areas", http.StatusInternalServerError)
-		return
-	}
-
-	locale := i18n.ResolveLocale(r)
-	data := railData()
-	data["Areas"] = areas
-	data["Username"] = sessionAdminUsername(r)
-	data["Section"] = "admin-areas"
-	data["Messages"] = i18n.GetMessages(locale)
-
-	templates.ExecuteTemplate(w, "admin_page_areas.html", data)
-}
-
 // slugify converte un nome area in una chiave stabile (minuscolo,
 // solo lettere/numeri/underscore) usata come valore di contacts.area.
 func slugify(name string) string {
@@ -1298,67 +1106,6 @@ func slugify(name string) string {
 		}
 	}
 	return b.String()
-}
-
-func handleAdminCreateArea(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimSpace(r.FormValue("name"))
-	if name == "" {
-		renderAdminAreas(w, r)
-		return
-	}
-	key := slugify(name)
-	if key == "" {
-		renderAdminAreas(w, r)
-		return
-	}
-
-	if err := db.CreateArea(&database.Area{Key: key, Name: name}); err != nil {
-		log.Printf("[ADMIN] Failed to create area %q: %v", name, err)
-	}
-	renderAdminAreas(w, r)
-}
-
-func handleAdminRenameArea(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	id, _ := strconv.ParseInt(vars["id"], 10, 64)
-	name := strings.TrimSpace(r.FormValue("name"))
-	if name == "" {
-		renderAdminAreas(w, r)
-		return
-	}
-
-	if err := db.RenameArea(id, name); err != nil {
-		log.Printf("[ADMIN] Failed to rename area %d: %v", id, err)
-	}
-
-	// Regola per range interno (opzionale): entrambi i campi vuoti =
-	// nessuna regola (SetAreaRange con nil, nil la rimuove).
-	var rangeStart, rangeEnd *int
-	if v := strings.TrimSpace(r.FormValue("range_start")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			rangeStart = &n
-		}
-	}
-	if v := strings.TrimSpace(r.FormValue("range_end")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			rangeEnd = &n
-		}
-	}
-	if err := db.SetAreaRange(id, rangeStart, rangeEnd); err != nil {
-		log.Printf("[ADMIN] Failed to set area range %d: %v", id, err)
-	}
-
-	renderAdminAreas(w, r)
-}
-
-func handleAdminDeleteArea(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	id, _ := strconv.ParseInt(vars["id"], 10, 64)
-
-	if err := db.DeleteArea(id); err != nil {
-		log.Printf("[ADMIN] Failed to delete area %d: %v", id, err)
-	}
-	renderAdminAreas(w, r)
 }
 
 // renderAdminGroupCategories re-renders solo il frammento (usato dopo
@@ -1506,17 +1253,11 @@ func renderAdminContacts(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to list contacts", http.StatusInternalServerError)
 		return
 	}
-	areas, err := db.ListAreas()
-	if err != nil {
-		log.Printf("[ADMIN] Failed to list areas: %v", err)
-	}
 
 	locale := i18n.ResolveLocale(r)
-	data := map[string]interface{}{
-		"Contacts": contacts,
-		"Areas":    areas,
-		"Messages": i18n.GetMessages(locale),
-	}
+	data := manualContactsData(contacts)
+	data["Contacts"] = contacts
+	data["Messages"] = i18n.GetMessages(locale)
 	templates.ExecuteTemplate(w, "admin_contacts.html", data)
 }
 
@@ -1529,15 +1270,13 @@ func handleAdminContacts(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to list contacts", http.StatusInternalServerError)
 		return
 	}
-	areas, err := db.ListAreas()
-	if err != nil {
-		log.Printf("[ADMIN] Failed to list areas: %v", err)
-	}
 
 	locale := i18n.ResolveLocale(r)
 	data := railData()
+	for k, v := range manualContactsData(contacts) {
+		data[k] = v
+	}
 	data["Contacts"] = contacts
-	data["Areas"] = areas
 	data["Username"] = sessionAdminUsername(r)
 	data["Section"] = "admin-contacts"
 	data["Messages"] = i18n.GetMessages(locale)
@@ -1563,6 +1302,8 @@ func handleAdminCreateContact(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := db.CreateManualContact(c); err != nil {
 		log.Printf("[ADMIN] Failed to create manual contact %q: %v", name, err)
+	} else {
+		saveManualSubAreas(r, c.UID, c.Area)
 	}
 	renderAdminContacts(w, r)
 }
@@ -1587,6 +1328,8 @@ func handleAdminUpdateContact(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := db.UpdateManualContact(c); err != nil {
 		log.Printf("[ADMIN] Failed to update manual contact %q: %v", uid, err)
+	} else {
+		saveManualSubAreas(r, uid, c.Area)
 	}
 	renderAdminContacts(w, r)
 }
