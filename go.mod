@@ -10,7 +10,7 @@ require (
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/jimlambrt/gldap v0.1.14
 	github.com/joho/godotenv v1.5.1
-	github.com/mattn/go-sqlite3 v1.14.52
+	github.com/mattn/go-sqlite3 v1.14.53
 )
 
 require (
