@@ -182,9 +182,7 @@ func main() {
 		// extList: un contatto può avere più interni in AD separati da
 		// ";" (telephoneNumber multi-valore) — mostrati "700, 701" invece
 		// del ";" grezzo di storage.
-		"extList": func(s string) string {
-			return strings.ReplaceAll(s, ";", ", ")
-		},
+		"extList": formatExt,
 		// derefInt64ID: confronto diretto {{eq $ptr .ID}} tra *int64 e
 		// int64 fa fallire "eq" (tipi incompatibili) e tronca il resto
 		// del template — usata per confrontare GroupCategory.ParentID
@@ -268,6 +266,7 @@ func main() {
 	// Public routes
 	r.HandleFunc("/", handleIndex).Methods("GET")
 	r.HandleFunc("/search", handleSearch).Methods("GET")
+	r.HandleFunc("/api/cerca", handleAPISearch).Methods("GET")
 	r.HandleFunc("/contacts", handleContacts).Methods("GET")
 	r.HandleFunc("/contacts/{uid}", handleContactDetail).Methods("GET")
 	r.HandleFunc("/contacts/{uid}/fragment", handleContactDetailFragment).Methods("GET")
